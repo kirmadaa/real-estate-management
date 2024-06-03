@@ -7,7 +7,7 @@ export const environment = {
   api: {
     server: 'http://localhost:8000/',
     mapKey: 'AAPK813f477568b44879a2f13ed12f45d5aeqrUonQPMhXY5H_rXFhCH97UBYzhi2rsy_oAeI1orfCfBAS1BaUxtnSM1dXQuThCM',
-    googleAuthClientId: '',
+    googleAuthClientId: 'VIKRL2JQUc5G9nsu',
     webSocketUrl: "ws://localhost:8000/websocket"
   }
 };

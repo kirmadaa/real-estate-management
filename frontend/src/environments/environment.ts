@@ -5,10 +5,10 @@
 export const environment = {
   production: false,
   api: {
-    server: 'http://localhost:8000/',
+    server: 'http://localhost:3000/',
     mapKey: 'AAPK813f477568b44879a2f13ed12f45d5aeqrUonQPMhXY5H_rXFhCH97UBYzhi2rsy_oAeI1orfCfBAS1BaUxtnSM1dXQuThCM',
     googleAuthClientId: 'VIKRL2JQUc5G9nsu',
-    webSocketUrl: "ws://localhost:8000/websocket"
+    webSocketUrl: "ws://localhost:3000/websocket"
   }
 };
 

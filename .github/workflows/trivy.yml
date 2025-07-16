@@ -84,64 +84,64 @@ jobs:
           name: trivy-report
           path: $SCAN_REPORT
 
-  remediation:
-    name: 🔧 Automated Remediation
-    needs: trivy-scan
-    if: needs.trivy-scan.outputs.vulns != '0'
-    runs-on: ubuntu-latest
-    env:
-      BRANCH: ${{ needs.set_env.outputs.checkout_branch }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.BRANCH }}
+  # remediation:
+  #   name: 🔧 Automated Remediation
+  #   needs: trivy-scan
+  #   if: needs.trivy-scan.outputs.vulns != '0'
+  #   runs-on: ubuntu-latest
+  #   env:
+  #     BRANCH: ${{ needs.set_env.outputs.checkout_branch }}
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+  #       with:
+  #         ref: ${{ env.BRANCH }}
 
-      - name: Run remediation script
-        run: |
-          chmod +x .github/scripts/remediate.sh
-          ./.github/scripts/remediate.sh
+  #     - name: Run remediation script
+  #       run: |
+  #         chmod +x .github/scripts/remediate.sh
+  #         ./.github/scripts/remediate.sh
 
-      - name: Commit & push fixes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Dockerfile package.json requirements.txt || true
-          git commit -m "Automated remediation fixes" || echo "No changes to commit"
-          git push origin $BRANCH
+  #     - name: Commit & push fixes
+  #       run: |
+  #         git config user.name "github-actions[bot]"
+  #         git config user.email "github-actions[bot]@users.noreply.github.com"
+  #         git add Dockerfile package.json requirements.txt || true
+  #         git commit -m "Automated remediation fixes" || echo "No changes to commit"
+  #         git push origin $BRANCH
 
-  ccli_hydra_e1_deployment:
-    name: 🚀🟡 Deploy image to E1 Hydra
-    needs: [ace-build, trivy-scan]
-    uses: amex-eng/ace-platform-reusable-workflow/.github/workflows/deploy_to_hydra_ccli_validate.yml@main
-    with:
-      image_name_ccli: artifactory.aexp.com/dockerproxy/${{ needs.set_env.outputs.image_name }}
-      sha256: ${{ needs.ace-build.outputs.pushed_image }}
-      regions: US
-      env: "E1"
-      project: ${{ vars.PROJECT }}
-      service: ${{ vars.SERVICE }}
-      image_time_stamp: ${{ needs.ace-build.outputs.image_tag }}
-    secrets:
-      SE_USERNAME: ${{ secrets.SE_USERNAME }}
-      SE_PASSWORD: ${{ secrets.SE_PASSWORD }}
-      ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
-      ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+  # ccli_hydra_e1_deployment:
+  #   name: 🚀🟡 Deploy image to E1 Hydra
+  #   needs: [ace-build, trivy-scan]
+  #   uses: amex-eng/ace-platform-reusable-workflow/.github/workflows/deploy_to_hydra_ccli_validate.yml@main
+  #   with:
+  #     image_name_ccli: artifactory.aexp.com/dockerproxy/${{ needs.set_env.outputs.image_name }}
+  #     sha256: ${{ needs.ace-build.outputs.pushed_image }}
+  #     regions: US
+  #     env: "E1"
+  #     project: ${{ vars.PROJECT }}
+  #     service: ${{ vars.SERVICE }}
+  #     image_time_stamp: ${{ needs.ace-build.outputs.image_tag }}
+  #   secrets:
+  #     SE_USERNAME: ${{ secrets.SE_USERNAME }}
+  #     SE_PASSWORD: ${{ secrets.SE_PASSWORD }}
+  #     ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+  #     ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
 
-  ccli_hydra_e2_deployment:
-    name: 🚀🟠 Deploy image to E2 Hydra
-    needs: [ace-build, trivy-scan, ccli_hydra_e1_deployment]
-    uses: amex-eng/ace-platform-reusable-workflow/.github/workflows/deploy_to_hydra_ccli_validate.yml@main
-    with:
-      image_name_ccli: artifactory.aexp.com/dockerproxy/${{ needs.set_env.outputs.image_name }}
-      sha256: ${{ needs.ace-build.outputs.pushed_image }}
-      regions: US
-      env: "E2"
-      project: ${{ vars.PROJECT }}
-      service: ${{ vars.SERVICE }}
-      image_time_stamp: ${{ needs.ace-build.outputs.image_tag }}
-    secrets:
-      SE_USERNAME: ${{ secrets.SE_USERNAME }}
-      SE_PASSWORD: ${{ secrets.SE_PASSWORD }}
-      ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
-      ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+  # ccli_hydra_e2_deployment:
+  #   name: 🚀🟠 Deploy image to E2 Hydra
+  #   needs: [ace-build, trivy-scan, ccli_hydra_e1_deployment]
+  #   uses: amex-eng/ace-platform-reusable-workflow/.github/workflows/deploy_to_hydra_ccli_validate.yml@main
+  #   with:
+  #     image_name_ccli: artifactory.aexp.com/dockerproxy/${{ needs.set_env.outputs.image_name }}
+  #     sha256: ${{ needs.ace-build.outputs.pushed_image }}
+  #     regions: US
+  #     env: "E2"
+  #     project: ${{ vars.PROJECT }}
+  #     service: ${{ vars.SERVICE }}
+  #     image_time_stamp: ${{ needs.ace-build.outputs.image_tag }}
+  #   secrets:
+  #     SE_USERNAME: ${{ secrets.SE_USERNAME }}
+  #     SE_PASSWORD: ${{ secrets.SE_PASSWORD }}
+  #     ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+  #     ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}

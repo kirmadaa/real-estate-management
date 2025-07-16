@@ -213,14 +213,14 @@ jobs:
           path: .
 
       - name: Make remediation script executable
-        run: chmod +x .github/scripts/remediate.py
+        run: chmod +x .github/scripts/reditest.py
 
       - name: Run remediation script
         id: run_remediation
         continue-on-error: true
         run: |
           # The Python script will modify files in APP_ROOT_DIRECTORY (e.g., package.json, Dockerfile)
-          python .github/scripts/remediate.py \
+          python .github/scripts/reditest.py \
             trivy-report.json \
             "${{ env.APP_DOCKERFILE_PATH }}" \
             "${{ env.APP_ROOT_DIRECTORY }}"

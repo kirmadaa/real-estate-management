@@ -138,16 +138,15 @@ def harden_dockerfile(dockerfile_path):
                         insert_index = i + 1
 
             if insert_index != -1:
-                # Add a non-root user. For Node.js, 'node' user often exists.
-                # Otherwise, you'd need to add commands to create a user.
-                user_add_commands = [
-                    "RUN groupadd --system appgroup && useradd --system --gid appgroup appuser\\n",
-                    "USER appuser\\n"
+                # Corrected: Each line must end with '\n' for writelines, no literal '\\n'
+                user_add_commands_to_insert = [
+                    "RUN groupadd --system appgroup && useradd --system --gid appgroup appuser\n",
+                    "USER appuser\n"
                 ]
                 # Check if base image provides a 'node' user by default (common in Node.js images)
                 from_line = next((l for l in lines if l.strip().upper().startswith("FROM")), "").lower()
                 if "node:" in from_line:
-                    user_add_commands = ["USER node\\n"] # Assume 'node' user exists
+                    user_add_commands_to_insert = ["USER node\n"] # Assume 'node' user exists
                 
                 # If 'USER root' is explicitly used, replace it
                 if "USER root" in "".join(lines).upper():
@@ -155,15 +154,15 @@ def harden_dockerfile(dockerfile_path):
                     temp_lines = []
                     for line in lines:
                         if line.strip().upper() == "USER ROOT":
-                            temp_lines.extend(user_add_commands)
+                            temp_lines.extend(user_add_commands_to_insert) # Use extend for multiple lines
                         else:
                             temp_lines.append(line)
                     new_lines = temp_lines # Apply changes to new_lines for further processing
                     print("Replaced 'USER root' with non-root user commands.")
                     updated_user = True
                 elif not user_set: # Only add if no USER instruction was present initially
-                    # Need to convert list of strings to single string for insert
-                    new_lines.insert(insert_index, "\\n" + "".join(user_add_commands))
+                    # Corrected: Insert individual lines, not a single joined string with extra \n
+                    new_lines[insert_index:insert_index] = user_add_commands_to_insert
                     print("Added non-root user to Dockerfile.")
                     updated_user = True
             else:
@@ -176,22 +175,22 @@ def harden_dockerfile(dockerfile_path):
         if not workdir_set:
             # Try to insert WORKDIR after USER or after FROM if no user was added
             insert_point_found = False
-            for i, line in enumerate(new_lines):
+            for i, line in enumerate(new_lines): # Iterate through new_lines as it might have been modified
                 if line.strip().upper().startswith("USER"):
-                    new_lines.insert(i + 1, "WORKDIR /app\\n")
+                    new_lines.insert(i + 1, "WORKDIR /app\n") # Corrected: single '\n'
                     print("Added WORKDIR /app to Dockerfile after USER.")
                     updated_workdir = True
                     insert_point_found = True
                     break
                 elif line.strip().upper().startswith("FROM"):
                     if not insert_point_found: # If WORKDIR wasn't added after USER, add after FROM
-                        new_lines.insert(i + 1, "WORKDIR /app\\n")
+                        new_lines.insert(i + 1, "WORKDIR /app\n") # Corrected: single '\n'
                         print("Added WORKDIR /app to Dockerfile after FROM.")
                         updated_workdir = True
                         insert_point_found = True
                         break
             if not insert_point_found: # Fallback: add at the very beginning
-                new_lines.insert(0, "WORKDIR /app\\n")
+                new_lines.insert(0, "WORKDIR /app\n") # Corrected: single '\n'
                 print("Added WORKDIR /app to Dockerfile at start.")
                 updated_workdir = True
         else:
@@ -209,16 +208,6 @@ def harden_dockerfile(dockerfile_path):
     except Exception as e:
         print(f"Error hardening Dockerfile: {e}")
         return False
-
-def main():
-    # Expect trivy_report.json, dockerfile_path, and app_root_dir as command line arguments
-    if len(sys.argv) < 4:
-        print("Usage: python remediate.py <trivy_report.json> <dockerfile_path> <app_root_dir>")
-        sys.exit(1)
-
-    report_path = sys.argv[1]
-    dockerfile_path = sys.argv[2]
-    app_root_dir = sys.argv[3]
 
 
     if not os.path.exists(report_path):

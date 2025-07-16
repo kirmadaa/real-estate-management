@@ -1,11 +1,11 @@
-name: TaskApi - E1 → E2 US Hydra with Trivy Remediation v2
+name: TaskApi - Docker Build, Push, and Security Scan
 
 on:
   workflow_dispatch:
 
 env:
   DOCKER_HUB_USERNAME: kiramdadaa
-  IMAGE_NAME: kiramdadaa/taskapi-frontend
+  IMAGE_NAME: ${{ env.DOCKER_HUB_USERNAME }}/taskapi-frontend  # Ensures correct formatting
 
 jobs:
   set_env:
@@ -23,15 +23,13 @@ jobs:
         id: setvars
         run: |
           echo "image_name=${{ env.IMAGE_NAME }}" >> $GITHUB_OUTPUT
-          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "image_tag=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT  # Short SHA for readability
           echo "checkout_branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
-  ace-build:
+  docker_build_push:
     name: 🐳 Build and Push Docker Image
     needs: set_env
     runs-on: ubuntu-latest
-    outputs:
-      pushed_image: ${{ steps.push.outputs.image }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -47,6 +45,12 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      
+      - name: Verify Docker Hub login
+        run: |
+          echo "Logged in as:"
+          docker info | grep Username
+          echo "Trying to push to: ${{ env.IMAGE_NAME }}"
 
       - name: Build and Push Docker Image
         id: push
@@ -60,72 +64,47 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_PROGRESS=plain  # Detailed build logs
         env:
           DOCKER_BUILDKIT: 1
 
-      - name: Set output
+      - name: Verify Push Success
         run: |
-          echo "image=${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}" >> $GITHUB_OUTPUT
+          echo "Pushed image: ${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}"
+          docker pull ${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }} || echo "Pull test failed"
 
-  trivy-scan:
-    name: 🔍 Trivy Scan
-    needs: ace-build
+  trivy_scan:
+    name: 🔍 Trivy Security Scan
+    needs: docker_build_push
     runs-on: ubuntu-latest
-    outputs:
-      vulns: ${{ steps.parse.outputs.vulns }}
-    env:
-      IMAGE: ${{ needs.ace-build.outputs.pushed_image }}
-      SCAN_REPORT: trivy-report.json
     steps:
-      - name: Install Trivy and jq
+      - name: Install Trivy
         run: |
-          sudo apt-get update && sudo apt-get install -y jq
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin latest
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
           trivy --version
 
-      - name: Run Trivy scan
-        id: scan
+      - name: Scan Docker Image
         run: |
-          echo "Scanning image: $IMAGE"
-          # First try to pull the image if not exists locally
-          docker pull $IMAGE || true
-          
-          # Run scan with timeout
-          timeout 300 trivy image --security-checks vuln --format json --output $SCAN_REPORT --timeout 10m $IMAGE || true
-          
-          # Verify report exists and is valid
-          if [ ! -f "$SCAN_REPORT" ]; then
-            echo '{"Results": []}' > $SCAN_REPORT
-          fi
-          
-          # Debug output
-          echo "Scan report info:"
-          ls -lah $SCAN_REPORT
-          echo "First 100 chars:"
-          head -c 100 $SCAN_REPORT || true
+          trivy image \
+            --security-checks vuln \
+            --format table \
+            --exit-code 0 \
+            ${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}
 
-      - name: Parse vulnerabilities
-        id: parse
+      - name: Generate JSON Report
         run: |
-          # Ensure valid JSON
-          if ! jq -e . $SCAN_REPORT >/dev/null 2>&1; then
-            echo "Invalid JSON report, defaulting to 0 vulnerabilities"
-            echo "vulns=0" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Count vulnerabilities safely
-          count=$(jq '[.Results[].Vulnerabilities[]?] | length' $SCAN_REPORT 2>/dev/null || echo "0")
-          echo "Found $count vulnerabilities"
-          echo "vulns=$count" >> $GITHUB_OUTPUT
+          trivy image \
+            --security-checks vuln \
+            --format json \
+            --output trivy-report.json \
+            ${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}
 
-      - name: Upload Trivy report
+      - name: Upload Scan Report
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-report
-          path: $SCAN_REPORT
-          if-no-files-found: warn
-
+          name: trivy-security-report
+          path: trivy-report.json
 # ... [rest of your pipeline including remediation and deployment jobs]
 
   # remediation:

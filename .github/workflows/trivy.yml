@@ -17,12 +17,12 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
+  
       - name: Set environment variables
         id: setvars
         run: |
           echo "image_name=${{ env.IMAGE_NAME }}" >> $GITHUB_OUTPUT
-          echo "image_tag=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT  # Short SHA for readability
+          echo "image_tag=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
           echo "checkout_branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
   docker_build_push:
@@ -75,51 +75,52 @@ jobs:
 
   trivy_scan:
     name: 🔍 Trivy Security Scan
-    needs: docker_build_push
+    needs: [set_env, docker_build_push]  # Explicitly depend on both
     runs-on: ubuntu-latest
-    env:
-      IMAGE_NAME: ${{ needs.set_env.outputs.image_name }}
-      IMAGE_TAG: ${{ needs.set_env.outputs.image_tag }}
     steps:
-      - name: Install Trivy with DB download
+      - name: Set image variables
+        id: vars
+        run: |
+          echo "IMAGE_NAME=${{ needs.set_env.outputs.image_name }}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${{ needs.set_env.outputs.image_tag }}" >> $GITHUB_ENV
+          echo "Set IMAGE_NAME=${{ needs.set_env.outputs.image_name }}"
+          echo "Set IMAGE_TAG=${{ needs.set_env.outputs.image_tag }}"
+  
+      - name: Install Trivy
         run: |
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
           trivy --version
-          trivy image --download-db-only
   
-      - name: Verify Docker image exists
+      - name: Verify variables
         run: |
-          echo "Attempting to pull image: $IMAGE_NAME:$IMAGE_TAG"
-          docker pull $IMAGE_NAME:$IMAGE_TAG || (echo "ERROR: Failed to pull image"; exit 1)
-          echo "Image exists and is accessible"
-  
-      - name: Verify image name and tag
-        run: |
-          echo "Scanning image: $IMAGE_NAME:$IMAGE_TAG"
-          if [ -z "$IMAGE_NAME" ] || [ -z "$IMAGE_TAG" ]; then
+          echo "Image to scan: ${IMAGE_NAME}:${IMAGE_TAG}"
+          if [ -z "${IMAGE_NAME}" ] || [ -z "${IMAGE_TAG}" ]; then
             echo "ERROR: Image name or tag is empty!"
             exit 1
           fi
   
-      - name: Scan Docker Image
+      - name: Pull Docker image
+        run: |
+          docker pull ${IMAGE_NAME}:${IMAGE_TAG} || (echo "ERROR: Failed to pull image"; exit 1)
+  
+      - name: Scan with Trivy
         run: |
           trivy image \
             --scanners vuln \
             --format table \
             --exit-code 0 \
             --timeout 10m \
-            "$IMAGE_NAME:$IMAGE_TAG"
+            "${IMAGE_NAME}:${IMAGE_TAG}"
   
-      - name: Generate JSON Report
+      - name: Generate JSON report
         run: |
           trivy image \
             --scanners vuln \
             --format json \
             --output trivy-report.json \
-            --timeout 10m \
-            "$IMAGE_NAME:$IMAGE_TAG"
+            "${IMAGE_NAME}:${IMAGE_TAG}"
   
-      - name: Upload Scan Report
+      - name: Upload report
         uses: actions/upload-artifact@v4
         with:
           name: trivy-security-report

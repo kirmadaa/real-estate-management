@@ -43,7 +43,8 @@ jobs:
         id: build
         run: |
           img="${{ needs.set_env.outputs.image_name }}:${{ needs.set_env.outputs.image_tag }}"
-          docker build -t frontend/Dockerfile -t "$img" frontend
+          # Fixed: Use -f flag to specify Dockerfile location, removed duplicate -t
+          docker build -f frontend/Dockerfile -t "$img" frontend/
           docker tag "$img" "${{ needs.set_env.outputs.image_name }}:latest"
           echo "Built $img and tagged as latest"
 
@@ -59,6 +60,8 @@ jobs:
     name: 🔍 Trivy Scan
     needs: ace-build
     runs-on: ubuntu-latest
+    outputs:
+      vulns: ${{ steps.parse.outputs.vulns }}
     env:
       IMAGE: ${{ needs.ace-build.outputs.pushed_image }}
       SCAN_REPORT: trivy-report.json
@@ -86,7 +89,7 @@ jobs:
 
   # remediation:
   #   name: 🔧 Automated Remediation
-  #   needs: trivy-scan
+  #   needs: [set_env, trivy-scan]
   #   if: needs.trivy-scan.outputs.vulns != '0'
   #   runs-on: ubuntu-latest
   #   env:
@@ -106,13 +109,13 @@ jobs:
   #       run: |
   #         git config user.name "github-actions[bot]"
   #         git config user.email "github-actions[bot]@users.noreply.github.com"
-  #         git add Dockerfile package.json requirements.txt || true
+  #         git add frontend/Dockerfile package.json requirements.txt || true
   #         git commit -m "Automated remediation fixes" || echo "No changes to commit"
   #         git push origin $BRANCH
 
   # ccli_hydra_e1_deployment:
   #   name: 🚀🟡 Deploy image to E1 Hydra
-  #   needs: [ace-build, trivy-scan]
+  #   needs: [set_env, ace-build, trivy-scan]
   #   uses: amex-eng/ace-platform-reusable-workflow/.github/workflows/deploy_to_hydra_ccli_validate.yml@main
   #   with:
   #     image_name_ccli: artifactory.aexp.com/dockerproxy/${{ needs.set_env.outputs.image_name }}
@@ -121,7 +124,7 @@ jobs:
   #     env: "E1"
   #     project: ${{ vars.PROJECT }}
   #     service: ${{ vars.SERVICE }}
-  #     image_time_stamp: ${{ needs.ace-build.outputs.image_tag }}
+  #     image_time_stamp: ${{ needs.set_env.outputs.image_tag }}
   #   secrets:
   #     SE_USERNAME: ${{ secrets.SE_USERNAME }}
   #     SE_PASSWORD: ${{ secrets.SE_PASSWORD }}
@@ -130,7 +133,7 @@ jobs:
 
   # ccli_hydra_e2_deployment:
   #   name: 🚀🟠 Deploy image to E2 Hydra
-  #   needs: [ace-build, trivy-scan, ccli_hydra_e1_deployment]
+  #   needs: [set_env, ace-build, trivy-scan, ccli_hydra_e1_deployment]
   #   uses: amex-eng/ace-platform-reusable-workflow/.github/workflows/deploy_to_hydra_ccli_validate.yml@main
   #   with:
   #     image_name_ccli: artifactory.aexp.com/dockerproxy/${{ needs.set_env.outputs.image_name }}
@@ -139,7 +142,7 @@ jobs:
   #     env: "E2"
   #     project: ${{ vars.PROJECT }}
   #     service: ${{ vars.SERVICE }}
-  #     image_time_stamp: ${{ needs.ace-build.outputs.image_tag }}
+  #     image_time_stamp: ${{ needs.set_env.outputs.image_tag }}
   #   secrets:
   #     SE_USERNAME: ${{ secrets.SE_USERNAME }}
   #     SE_PASSWORD: ${{ secrets.SE_PASSWORD }}

@@ -4,8 +4,7 @@ on:
   workflow_dispatch:
 
 env:
-  DOCKER_HUB_USERNAME: kiramdadaa
-  IMAGE_NAME: ${{ env.DOCKER_HUB_USERNAME }}/taskapi-frontend  # Ensures correct formatting
+  IMAGE_NAME: ${{ env.DOCKERHUB_USERNAME }}/taskapi-frontend  # Ensures correct formatting
 
 jobs:
   set_env:

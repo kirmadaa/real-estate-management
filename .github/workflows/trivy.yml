@@ -78,7 +78,7 @@ jobs:
     needs: docker_build_push
     runs-on: ubuntu-latest
     env:
-      IMAGE_NAME: ${{ needs.set_env.outputs.full_image_name }}
+      IMAGE_NAME: ${{ needs.set_env.outputs.image_name }}
       IMAGE_TAG: ${{ needs.set_env.outputs.image_tag }}
     steps:
       - name: Install Trivy with DB download

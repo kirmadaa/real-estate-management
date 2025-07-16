@@ -11,8 +11,9 @@ env:
   IMAGE_NAME: kirmadadaa/taskapi-frontend # Ensures correct formatting
   # Define the paths for your Dockerfile and application root here
   # This makes the workflow more configurable for different projects/modules
-  APP_DOCKERFILE_PATH: frontend/Dockerfile
-  APP_ROOT_DIRECTORY: frontend/
+  # These are now defaults that will be passed as outputs from set_env
+  DEFAULT_APP_DOCKERFILE_PATH: frontend/Dockerfile
+  DEFAULT_APP_ROOT_DIRECTORY: frontend/
 
 jobs:
   set_env:
@@ -23,6 +24,10 @@ jobs:
       image_tag: ${{ steps.setvars.outputs.image_tag }}
       checkout_branch: ${{ steps.setvars.outputs.checkout_branch }}
       run_id: ${{ github.run_id }} # Pass run ID for artifact download
+      # --- FIX: Add Dockerfile and root directory as outputs ---
+      app_dockerfile_path: ${{ steps.setvars.outputs.app_dockerfile_path }}
+      app_root_directory: ${{ steps.setvars.outputs.app_root_directory }}
+      # --- END FIX ---
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -34,6 +39,10 @@ jobs:
           echo "image_tag=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
           echo "checkout_branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
           echo "run_id=${GITHUB_RUN_ID}" >> $GITHUB_OUTPUT # Capture run ID
+          # --- FIX: Pass Dockerfile and root directory from workflow env to outputs ---
+          echo "app_dockerfile_path=${{ env.DEFAULT_APP_DOCKERFILE_PATH }}" >> $GITHUB_OUTPUT
+          echo "app_root_directory=${{ env.DEFAULT_APP_ROOT_DIRECTORY }}" >> $GITHUB_OUTPUT
+          # --- END FIX ---
 
   docker_build_push:
     name: 🐳 Build and Push Docker Image
@@ -65,8 +74,10 @@ jobs:
         id: push
         uses: docker/build-push-action@v5
         with:
-          context: ${{ env.APP_ROOT_DIRECTORY }} # Use dynamic path
-          file: ${{ env.APP_DOCKERFILE_PATH }}   # Use dynamic path
+          # --- FIX: Access APP_ROOT_DIRECTORY and APP_DOCKERFILE_PATH from set_env outputs ---
+          context: ${{ needs.set_env.outputs.app_root_directory }} # Use dynamic path from outputs
+          file: ${{ needs.set_env.outputs.app_dockerfile_path }}    # Use dynamic path from outputs
+          # --- END FIX ---
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}
@@ -132,7 +143,7 @@ jobs:
             --format json \
             --output trivy-report.json \
             "${IMAGE_NAME}:${IMAGE_TAG}"
-          
+
           if jq -e '.[] | select(.Vulnerabilities != null and .Vulnerabilities | length > 0)' trivy-report.json > /dev/null; then
             echo "Vulnerabilities found!"
             echo "found=true" >> $GITHUB_OUTPUT
@@ -155,9 +166,10 @@ jobs:
     env:
       BRANCH: ${{ needs.set_env.outputs.checkout_branch }}
       RUN_ID: ${{ needs.set_env.outputs.run_id }}
-      # Pass these dynamic paths to remediation job for consistent use
-      APP_DOCKERFILE_PATH: ${{ env.APP_DOCKERFILE_PATH }}
-      APP_ROOT_DIRECTORY: ${{ env.APP_ROOT_DIRECTORY }}
+      # --- FIX: Pass these dynamic paths to remediation job for consistent use from set_env outputs ---
+      APP_DOCKERFILE_PATH: ${{ needs.set_env.outputs.app_dockerfile_path }}
+      APP_ROOT_DIRECTORY: ${{ needs.set_env.outputs.app_root_directory }}
+      # --- END FIX ---
       IMAGE_NAME: ${{ needs.set_env.outputs.image_name }}
       IMAGE_TAG: ${{ needs.set_env.outputs.image_tag }}
     steps:
@@ -187,7 +199,7 @@ jobs:
             sudo apt-get install -y npm
             npm config set unsafe-perm true # Potentially needed for global npm installs as root
           fi
-      
+
       # Example for Go:
       # - name: Set up Go (if needed for Go projects)
       #   uses: actions/setup-go@v5
@@ -212,7 +224,7 @@ jobs:
             trivy-report.json \
             "${{ env.APP_DOCKERFILE_PATH }}" \
             "${{ env.APP_ROOT_DIRECTORY }}"
-          
+
           if [ $? -eq 0 ]; then
             echo "remediation_status=success" >> $GITHUB_OUTPUT
           else
@@ -249,19 +261,19 @@ jobs:
           echo "Rebuilding and re-scanning image to validate fixes..."
           # Pull base image to ensure it's available for rebuild, as the runner might be clean
           docker pull "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" || echo "Warning: Could not pull original image, proceeding with build."
-          
+
           # Build the remediated image with a new tag
           docker build -t "${{ env.IMAGE_NAME }}:remediated-${{ github.sha }}" \
             -f "${{ env.APP_DOCKERFILE_PATH }}" \
             "${{ env.APP_ROOT_DIRECTORY }}"
-          
+
           # Scan the newly built remediated image
           trivy image \
             --scanners vuln \
             --format json \
             --output trivy-remediated-report.json \
             "${{ env.IMAGE_NAME }}:remediated-${{ github.sha }}" || true # Continue on error if scan fails
-          
+
           if [ -f trivy-remediated-report.json ] && jq -e '.[] | select(.Vulnerabilities != null and .Vulnerabilities | length > 0)' trivy-remediated-report.json > /dev/null; then
             echo "Vulnerabilities still present after remediation. Manual review needed."
             echo "remediation_validation=failure" >> $GITHUB_OUTPUT
@@ -276,14 +288,17 @@ jobs:
         with:
           name: trivy-remediated-security-report
           path: trivy-remediated-report.json
-          
+
       # Add this step to ensure the remediation validation status is passed out
       - name: Set remediation validation output
         id: set_remediation_validation_output
+        # This output needs to be populated based on the previous step's output (Rebuild and Re-scan)
+        # Use an 'if' condition to ensure it only runs if the rebuild/re-scan step ran
+        if: steps.git_status.outputs.changes_made == 'true'
         run: |
-          echo "remediation_validation=${{ steps.run_remediation.outputs.remediation_validation }}" >> $GITHUB_OUTPUT
+          echo "remediation_validation=${{ steps.rebuild_and_rescan.outputs.remediation_validation }}" >> $GITHUB_OUTPUT
 
-          
+
       # - name: Notify Slack (Remediation Status)
       #   uses: rtCamp/action-slack-notify@v2
       #   env:
@@ -296,10 +311,10 @@ jobs:
       #       Repository: `${{ github.repository }}`
       #       Branch: `${{ env.BRANCH }}`
       #       Workflow Run: <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_id }}>
-            
+      #
       #       Status: ${{ steps.run_remediation.outputs.remediation_status }}
-      #       ${{ steps.git_status.outputs.changes_made == 'true' && format('Validation Scan: {0}', steps.run_remediation.outputs.remediation_validation) || 'No changes made by remediation.' }}
-            
+      #       ${{ steps.git_status.outputs.changes_made == 'true' && format('Validation Scan: {0}', steps.rebuild_and_rescan.outputs.remediation_validation) || 'No changes made by remediation.' }}
+      #
       #       ${{ steps.git_status.outputs.changes_made == 'true' && 'Fixed files committed. New scan results attached as artifact.' || 'No fixes applied or no changes detected.' }}
       #       ${{ steps.run_remediation.outputs.remediation_status == 'failure' && '🚨 Remediation failed or partial. Manual intervention required.' || '' }}
       #   if: always()

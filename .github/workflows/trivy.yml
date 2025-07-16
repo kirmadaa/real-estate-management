@@ -9,6 +9,10 @@ on:
 
 env:
   IMAGE_NAME: kirmadadaa/taskapi-frontend # Ensures correct formatting
+  # Define the paths for your Dockerfile and application root here
+  # This makes the workflow more configurable for different projects/modules
+  APP_DOCKERFILE_PATH: frontend/Dockerfile
+  APP_ROOT_DIRECTORY: frontend/
 
 jobs:
   set_env:
@@ -61,8 +65,8 @@ jobs:
         id: push
         uses: docker/build-push-action@v5
         with:
-          context: frontend/
-          file: frontend/Dockerfile
+          context: ${{ env.APP_ROOT_DIRECTORY }} # Use dynamic path
+          file: ${{ env.APP_DOCKERFILE_PATH }}   # Use dynamic path
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}
@@ -70,7 +74,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            BUILDKIT_PROGRESS=plain # Detailed build logs
+            BUILDKIT_PROGRESS=plain
         env:
           DOCKER_BUILDKIT: 1
 
@@ -84,7 +88,6 @@ jobs:
     needs: [set_env, docker_build_push]
     runs-on: ubuntu-latest
     outputs:
-      # CORRECTED: Referencing the 'generate_json_report' step ID
       vulnerabilities_found: ${{ steps.generate_json_report.outputs.found }}
     steps:
       - name: Set image variables
@@ -122,7 +125,7 @@ jobs:
             "${IMAGE_NAME}:${IMAGE_TAG}"
 
       - name: Generate JSON report
-        id: generate_json_report # This ID is crucial for the output
+        id: generate_json_report
         run: |
           trivy image \
             --scanners vuln \
@@ -130,7 +133,6 @@ jobs:
             --output trivy-report.json \
             "${IMAGE_NAME}:${IMAGE_TAG}"
           
-          # Check if any vulnerabilities exist in the JSON report
           if jq -e '.[] | select(.Vulnerabilities != null and .Vulnerabilities | length > 0)' trivy-report.json > /dev/null; then
             echo "Vulnerabilities found!"
             echo "found=true" >> $GITHUB_OUTPUT
@@ -148,7 +150,7 @@ jobs:
   remediation:
     name: 🔧 Automated Remediation
     needs: [set_env, trivy_scan]
-    # if: needs.trivy_scan.outputs.vulnerabilities_found == 'true' # This condition will now work correctly
+    if: needs.trivy_scan.outputs.vulnerabilities_found == 'true'
     runs-on: ubuntu-latest
     env:
       BRANCH: ${{ needs.set_env.outputs.checkout_branch }}
@@ -164,9 +166,22 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install npm
+      - name: Install JQ for JSON parsing
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Install npm (if needed for Node.js projects)
         run: |
-          sudo apt-get update && sudo apt-get install -y npm
+          # Only install if package.json exists in the app root, or if we anticipate Node.js fixes
+          if [ -f "${{ env.APP_ROOT_DIRECTORY }}/package.json" ]; then
+            sudo apt-get install -y npm
+          fi
+
+      # Add installation steps for other package managers (pip, bundle, go, etc.) if your projects use them
+      # Example for Go:
+      # - name: Set up Go (if needed for Go projects)
+      #   uses: actions/setup-go@v5
+      #   with:
+      #     go-version: '1.x'
 
       - name: Download Trivy report artifact
         uses: actions/download-artifact@v4
@@ -180,8 +195,13 @@ jobs:
       - name: Run remediation script
         id: run_remediation
         continue-on-error: true
+        # Pass the report path, dockerfile path, and app root directory to the script
         run: |
-          python .github/scripts/remediate.py
+          python .github/scripts/remediate.py \
+            trivy-report.json \
+            "${{ env.APP_DOCKERFILE_PATH }}" \
+            "${{ env.APP_ROOT_DIRECTORY }}"
+          
           if [ $? -eq 0 ]; then
             echo "remediation_status=success" >> $GITHUB_OUTPUT
           else
@@ -208,7 +228,10 @@ jobs:
         if: steps.git_status.outputs.changes_made == 'true'
         run: |
           echo "Rebuilding and re-scanning image to validate fixes..."
-          docker build -t ${{ env.IMAGE_NAME }}:remediated-${{ github.sha }} frontend/ -f frontend/Dockerfile
+          # Use dynamic paths for context and file for rebuild
+          docker build -t ${{ env.IMAGE_NAME }}:remediated-${{ github.sha }} \
+            -f ${{ env.APP_DOCKERFILE_PATH }} \
+            ${{ env.APP_ROOT_DIRECTORY }}
           
           trivy image \
             --scanners vuln \
@@ -231,28 +254,27 @@ jobs:
           name: trivy-remediated-security-report
           path: trivy-remediated-report.json
           
-      - name: Notify Slack (Remediation Status)
-        uses: rtCamp/action-slack-notify@v2
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_CHANNEL: '#devsecops-alerts'
-          SLACK_USERNAME: 'Vulnerability Remediation Bot'
-          SLACK_ICON_EMOJI: ':robot_face:'
-          SLACK_MESSAGE: |
-            *Automated Vulnerability Remediation Attempt Result*
-            Repository: `${{ github.repository }}`
-            Branch: `${{ env.BRANCH }}`
-            Workflow Run: <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_id }}>
+      # - name: Notify Slack (Remediation Status)
+      #   uses: rtCamp/action-slack-notify@v2
+      #   env:
+      #     SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+      #     SLACK_CHANNEL: '#devsecops-alerts'
+      #     SLACK_USERNAME: 'Vulnerability Remediation Bot'
+      #     SLACK_ICON_EMOJI: ':robot_face:'
+      #     SLACK_MESSAGE: |
+      #       *Automated Vulnerability Remediation Attempt Result*
+      #       Repository: `${{ github.repository }}`
+      #       Branch: `${{ env.BRANCH }}`
+      #       Workflow Run: <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_id }}>
             
-            Status: ${{ steps.run_remediation.outputs.remediation_status }}
-            ${{ steps.git_status.outputs.changes_made == 'true' && format('Validation Scan: {0}', steps.remediation.outputs.remediation_validation) || 'No changes made by remediation.' }}
+      #       Status: ${{ steps.run_remediation.outputs.remediation_status }}
+      #       ${{ steps.git_status.outputs.changes_made == 'true' && format('Validation Scan: {0}', steps.run_remediation.outputs.remediation_validation) || 'No changes made by remediation.' }}
             
-            ${{ steps.git_status.outputs.changes_made == 'true' && 'Fixed files committed. New scan results attached as artifact.' || 'No fixes applied or no changes detected.' }}
-            ${{ steps.run_remediation.outputs.remediation_status == 'failure' && '🚨 Remediation failed or partial. Manual intervention required.' || '' }}
-        if: always()
+      #       ${{ steps.git_status.outputs.changes_made == 'true' && 'Fixed files committed. New scan results attached as artifact.' || 'No fixes applied or no changes detected.' }}
+      #       ${{ steps.run_remediation.outputs.remediation_status == 'failure' && '🚨 Remediation failed or partial. Manual intervention required.' || '' }}
+      #   if: always()
 
   # Uncomment and modify these deployment jobs as needed
-  # They should depend on `remediation` and check its `remediation_validation` output
   # ccli_hydra_e1_deployment:
   #   name: 🚀🟡 Deploy image to E1 Hydra
   #   needs: [set_env, docker_build_push, trivy_scan, remediation]

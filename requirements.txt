@@ -1,0 +1,2 @@
+flask==2.0.0 # Old version, might have vulnerable dependencies
+requests==2.25.1

@@ -443,24 +443,31 @@ def harden_dockerfile(dockerfile_path):
         return False
 
 # --- NEW FUNCTION FOR INTERNET SEARCH AND FIX DISCOVERY ---
-def find_fix_online(vulnerability_id, package_name, installed_version, description, severity):
+def find_fix_online(vulnerability_id, package_name, installed_version, description, severity, current_base_image=None):
     """
-    Searches the internet for remediation information for a given vulnerability.
-    Returns a dictionary with 'fixed_version' (if found) or 'remediation_advice'.
-    This is a mock-up function. In a real scenario, this would involve:
-    1. Querying public vulnerability databases (NVD, OSV, GHSA).
-    2. Parsing security advisories for fixed versions or recommended actions.
-    3. Potentially using AI/ML to infer fixes from unstructured text.
+    Simulates online search for remediation information.
+    Prioritizes upgrading to a patched version of the *same distribution family*.
     """
     logging.info(f"Simulating online search for fix for {vulnerability_id} (Package: {package_name}, Version: {installed_version})")
     
-    # Example Heuristics (REPLACE WITH REAL API CALLS/DB LOOKUPS)
-    # Heuristic 1: Base OS vulnerability suggesting a base image upgrade
-    if "linux kernel" in description.lower() or "linux-libc-dev" in package_name.lower() or "glibc" in package_name.lower():
+    # Heuristic for OS-level vulnerabilities suggesting a base image upgrade
+    if "linux kernel" in description.lower() or "linux-libc-dev" in package_name.lower() or "glibc" in package_name.lower() or "openssl" in package_name.lower():
         logging.info("Simulated: Found a recommended base image upgrade for a critical OS vulnerability.")
-        # In a real system, you'd determine the latest patched version of the base image.
-        # Example: if current is 'debian:11-slim', recommend 'debian:12-slim' or specific patched version.
-        return {"type": "base_image_upgrade", "recommended_image": "debian:12-slim"} # Example newer version
+        
+        if current_base_image:
+            current_base_image_lower = current_base_image.lower()
+            if "node:" in current_base_image_lower:
+                logging.info(f"  Current base image is Node.js-based ('{current_base_image}'). Recommending a newer Node.js image.")
+                return {"type": "base_image_upgrade", "recommended_image": "node:20-slim"}
+            elif "debian:" in current_base_image_lower:
+                logging.info(f"  Current base image is Debian-based ('{current_base_image}'). Recommending a newer Debian slim image.")
+                return {"type": "base_image_upgrade", "recommended_image": "debian:12-slim"} # Use a valid, common tag
+            elif "alpine:" in current_base_image_lower:
+                 logging.info(f"  Current base image is Alpine-based ('{current_base_image}'). Recommending a newer Alpine slim image.")
+                 return {"type": "base_image_upgrade", "recommended_image": "alpine:3.19"}
+        
+        logging.info("  Could not identify specific base image type. Defaulting to generic Debian recommendation.")
+        return {"type": "base_image_upgrade", "recommended_image": "debian:12-slim"}
     
     # Heuristic 2: Specific common application dependency
     elif "git" in package_name.lower() and "file creation flaw" in description.lower():

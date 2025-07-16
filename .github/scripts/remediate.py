@@ -18,15 +18,21 @@ def run_command(cmd, cwd=None, check_result=True, capture_output=False):
         if capture_output:
             print(f"Stdout: {e.stdout}")
             print(f"Stderr: {e.stderr}")
+        # Re-raise the exception to indicate failure for the simulation
         raise
     except FileNotFoundError:
         print(f"Command not found: {cmd[0]}. Please ensure it's installed and in PATH.")
-        sys.exit(1)
+        # In a real scenario, sys.exit(1) would be here to fail the CI step
+        raise
 
 def update_dockerfile_base_image(dockerfile_path, current_image, fixed_image):
     """Updates the base image in a Dockerfile."""
     print(f"Attempting to update base image in {dockerfile_path} from {current_image} to {fixed_image}")
     try:
+        if not os.path.exists(dockerfile_path):
+            print(f"Dockerfile '{dockerfile_path}' not found for update.")
+            return False
+
         with open(dockerfile_path, 'r') as f:
             lines = f.readlines()
 
@@ -73,7 +79,8 @@ def fix_npm_dependency(package_name, fixed_version, app_root_dir):
     # Attempt npm update first
     try:
         print(f"Running 'npm update {package_name}' in {app_root_dir}")
-        run_command(["npm", "update", package_name], cwd=app_root_dir)
+        if not run_command(["npm", "update", package_name], cwd=app_root_dir):
+            raise Exception("npm update failed")
         print(f"Successfully ran 'npm update {package_name}'.")
         return True
     except Exception as e:
@@ -82,7 +89,8 @@ def fix_npm_dependency(package_name, fixed_version, app_root_dir):
         try:
             install_cmd = ["npm", "install", f"{package_name}@{fixed_version}"]
             print(f"Running '{' '.join(install_cmd)}' in {app_root_dir}")
-            run_command(install_cmd, cwd=app_root_dir)
+            if not run_command(install_cmd, cwd=app_root_dir):
+                raise Exception("npm install failed")
             print(f"Successfully ran 'npm install {package_name}@{fixed_version}'.")
             return True
         except Exception as e:
@@ -97,6 +105,10 @@ def harden_dockerfile(dockerfile_path):
     """
     print(f"Applying hardening to Dockerfile: {dockerfile_path}")
     try:
+        if not os.path.exists(dockerfile_path):
+            print(f"Dockerfile '{dockerfile_path}' not found for hardening.")
+            return False
+
         with open(dockerfile_path, 'r') as f:
             lines = f.readlines()
 
@@ -129,13 +141,13 @@ def harden_dockerfile(dockerfile_path):
                 # Add a non-root user. For Node.js, 'node' user often exists.
                 # Otherwise, you'd need to add commands to create a user.
                 user_add_commands = [
-                    "RUN groupadd --system appgroup && useradd --system --gid appgroup appuser\n",
-                    "USER appuser\n"
+                    "RUN groupadd --system appgroup && useradd --system --gid appgroup appuser\\n",
+                    "USER appuser\\n"
                 ]
                 # Check if base image provides a 'node' user by default (common in Node.js images)
                 from_line = next((l for l in lines if l.strip().upper().startswith("FROM")), "").lower()
                 if "node:" in from_line:
-                    user_add_commands = ["USER node\n"] # Assume 'node' user exists
+                    user_add_commands = ["USER node\\n"] # Assume 'node' user exists
                 
                 # If 'USER root' is explicitly used, replace it
                 if "USER root" in "".join(lines).upper():
@@ -150,7 +162,8 @@ def harden_dockerfile(dockerfile_path):
                     print("Replaced 'USER root' with non-root user commands.")
                     updated_user = True
                 elif not user_set: # Only add if no USER instruction was present initially
-                    new_lines.insert(insert_index, "\n" + "".join(user_add_commands))
+                    # Need to convert list of strings to single string for insert
+                    new_lines.insert(insert_index, "\\n" + "".join(user_add_commands))
                     print("Added non-root user to Dockerfile.")
                     updated_user = True
             else:
@@ -165,20 +178,20 @@ def harden_dockerfile(dockerfile_path):
             insert_point_found = False
             for i, line in enumerate(new_lines):
                 if line.strip().upper().startswith("USER"):
-                    new_lines.insert(i + 1, "WORKDIR /app\n")
+                    new_lines.insert(i + 1, "WORKDIR /app\\n")
                     print("Added WORKDIR /app to Dockerfile after USER.")
                     updated_workdir = True
                     insert_point_found = True
                     break
                 elif line.strip().upper().startswith("FROM"):
                     if not insert_point_found: # If WORKDIR wasn't added after USER, add after FROM
-                        new_lines.insert(i + 1, "WORKDIR /app\n")
+                        new_lines.insert(i + 1, "WORKDIR /app\\n")
                         print("Added WORKDIR /app to Dockerfile after FROM.")
                         updated_workdir = True
                         insert_point_found = True
                         break
             if not insert_point_found: # Fallback: add at the very beginning
-                new_lines.insert(0, "WORKDIR /app\n")
+                new_lines.insert(0, "WORKDIR /app\\n")
                 print("Added WORKDIR /app to Dockerfile at start.")
                 updated_workdir = True
         else:
@@ -199,7 +212,7 @@ def harden_dockerfile(dockerfile_path):
 
 def main():
     # Expect trivy_report.json, dockerfile_path, and app_root_dir as command line arguments
-    if len(sys.argv) < 4: # Changed from < 3 to < 4 as now expecting 3 arguments
+    if len(sys.argv) < 4:
         print("Usage: python remediate.py <trivy_report.json> <dockerfile_path> <app_root_dir>")
         sys.exit(1)
 
@@ -211,10 +224,9 @@ def main():
     if not os.path.exists(report_path):
         print(f"Trivy report not found at {report_path}. Exiting.")
         sys.exit(1)
+    # Allowing Dockerfile to be optional for OS fixes, but warning
     if not os.path.exists(dockerfile_path):
         print(f"Dockerfile not found at {dockerfile_path}. Proceeding but OS fixes may be limited.")
-        # We allow to continue if Dockerfile is not found, but it limits OS fixes
-        # sys.exit(1) # Removed exit, allowing partial fixes
     if not os.path.isdir(app_root_dir):
         print(f"Application root directory not found at {app_root_dir}. Exiting.")
         sys.exit(1)
@@ -223,14 +235,13 @@ def main():
         with open(report_path, 'r') as f:
             report = json.load(f)
     except json.JSONDecodeError as e:
-        print(f"Error decoding JSON report: {e}. Report content:\n{open(report_path).read()}")
+        print(f"Error decoding JSON report: {e}. Report content:\\n{open(report_path).read()}")
         sys.exit(1)
 
     vulnerabilities_found = 0
     vulnerabilities_fixed = 0
     repo_changed = False # Track if any file in the repo was changed
 
-    # CORRECTED: Iterate over the 'Results' list within the report
     for result in report.get("Results", []):
         target = result.get("Target", "")
         vulnerabilities = result.get("Vulnerabilities", [])
@@ -238,7 +249,7 @@ def main():
         if not vulnerabilities:
             continue
 
-        print(f"\nProcessing vulnerabilities for target: {target}")
+        print(f"\\nProcessing vulnerabilities for target: {target}")
 
         for vuln in vulnerabilities:
             vulnerabilities_found += 1
@@ -247,7 +258,7 @@ def main():
             installed_version = vuln.get("InstalledVersion", "N/A")
             fixed_version = vuln.get("FixedVersion", "")
             severity = vuln.get("Severity", "UNKNOWN")
-            data_source = vuln.get("DataSource", "N/A").lower() # Normalize data source
+            data_source = vuln.get("DataSource", {}).get("ID", "N/A").lower()
 
             if not fixed_version or fixed_version.lower() == "not fixed":
                 print(f"  [SKIPPING] {vuln_id} ({pkg_name}): No fix available ({severity}).")
@@ -255,72 +266,45 @@ def main():
 
             print(f"  [ATTEMPTING FIX] {vuln_id} ({pkg_name}) {installed_version} -> {fixed_version} ({severity})")
 
-            # --- Dynamic Remediation Logic based on DataSource/Target ---
             fixed_current_vuln = False
 
             if "npm" in data_source or "node.js" in target.lower() or "package.json" in target.lower():
-                # Ensure npm is installed for Node.js dependency fixes
+                print("  [INFO] Attempting NPM fix. This will likely fail in simulation if npm is not installed/in PATH.")
                 try:
-                    run_command(["npm", "--version"], check_result=True, capture_output=True)
                     if fix_npm_dependency(pkg_name, fixed_version, app_root_dir):
                         fixed_current_vuln = True
-                except Exception:
-                    print("npm not found. Skipping NPM fix.")
+                except Exception as e:
+                    print(f"  [ERROR] NPM fix failed due to environment issue: {e}")
             elif "pip" in data_source or "python" in target.lower() or "pipfile.lock" in target.lower() or "requirements.txt" in target.lower():
                 print(f"  [TODO] Implement pip fix for {pkg_name}. Requires 'pip install --upgrade {pkg_name}=={fixed_version}' in {app_root_dir}")
-                # Example for pip:
-                # try:
-                #     run_command([sys.executable, "-m", "pip", "install", "--upgrade", f"{pkg_name}=={fixed_version}"], cwd=app_root_dir)
-                #     fixed_current_vuln = True
-                # except Exception as e:
-                #     print(f"Failed to fix pip package {pkg_name}: {e}")
             elif "gem" in data_source or "ruby" in target.lower() or "gemfile.lock" in target.lower():
                 print(f"  [TODO] Implement gem fix for {pkg_name}. Requires 'bundle update {pkg_name}' or 'bundle install {pkg_name}' in {app_root_dir}")
-                # Example for gem:
-                # try:
-                #     run_command(["bundle", "update", pkg_name], cwd=app_root_dir)
-                #     fixed_current_vuln = True
-                # except Exception as e:
-                #     print(f"Failed to fix gem package {pkg_name}: {e}")
             elif "go" in data_source or "go.mod" in target.lower():
                 print(f"  [TODO] Implement go mod fix for {pkg_name}. Requires 'go get -u {pkg_name}' then 'go mod tidy' in {app_root_dir}")
-                # Example for go:
-                # try:
-                #     run_command(["go", "get", "-u", pkg_name], cwd=app_root_dir)
-                #     run_command(["go", "mod", "tidy"], cwd=app_root_dir)
-                #     fixed_current_vuln = True
-                # except Exception as e:
-                #     print(f"Failed to fix Go module {pkg_name}: {e}")
             elif any(os_distro in data_source for os_distro in ["debian", "alpine", "redhat", "ubuntu", "centos"]) or "os" in target.lower():
-                # This indicates a base OS component. The best fix is often to update the base image.
-                # Heuristic for base image update:
-                # This part is highly heuristic and might require manual mapping of new base image tags.
-                # For demonstration, we attempt a simple update logic if a Dockerfile is provided.
                 if os.path.exists(dockerfile_path):
                     try:
                         with open(dockerfile_path, 'r') as f:
                             dockerfile_content = f.read()
                         
-                        from_match = re.search(r"FROM\s+(\S+)", dockerfile_content, re.IGNORECASE)
+                        from_match = re.search(r"FROM\\s+(\\S+)", dockerfile_content, re.IGNORECASE)
                         if from_match:
                             current_base_image = from_match.group(1).strip()
                             updated_base_image = None
                             
-                            # Simple heuristic for common base images
                             if "alpine" in current_base_image.lower():
-                                match = re.search(r"alpine:(\d+\.\d+)", current_base_image, re.IGNORECASE)
+                                match = re.search(r"alpine:(\\d+\\.\\d+)", current_base_image, re.IGNORECASE)
                                 if match:
                                     major_minor = match.group(1)
                                     parts = [int(p) for p in major_minor.split('.')]
-                                    new_minor = parts[1] + 1 # Attempt to increment minor version
+                                    new_minor = parts[1] + 1
                                     updated_base_image = current_base_image.replace(major_minor, f"{parts[0]}.{new_minor}")
                                 else:
-                                    updated_base_image = current_base_image.split(':')[0] + ":latest" # Fallback to latest
+                                    updated_base_image = current_base_image.split(':')[0] + ":latest"
                             elif "debian" in current_base_image.lower():
                                 updated_base_image = current_base_image.split(':')[0] + ":latest"
                             elif "ubuntu" in current_base_image.lower():
                                 updated_base_image = current_base_image.split(':')[0] + ":latest"
-                            # Add more distributions as needed
 
                             if updated_base_image and update_dockerfile_base_image(dockerfile_path, current_base_image, updated_base_image):
                                 fixed_current_vuln = True
@@ -337,25 +321,25 @@ def main():
             
             if fixed_current_vuln:
                 vulnerabilities_fixed += 1
-                repo_changed = True # Mark that changes occurred
+                repo_changed = True
 
     # Apply general Dockerfile hardening if a Dockerfile path was provided
     if os.path.exists(dockerfile_path):
         if harden_dockerfile(dockerfile_path):
-            repo_changed = True # Mark that hardening changes occurred
+            repo_changed = True
 
     if vulnerabilities_found == 0:
-        print("\nNo vulnerabilities found in the report.")
-        sys.exit(0) # Success: nothing to fix
+        print("\\nNo vulnerabilities found in the report.")
+        sys.exit(0)
     elif vulnerabilities_fixed == vulnerabilities_found:
-        print(f"\nAll {vulnerabilities_fixed} vulnerabilities found have been fixed!")
-        sys.exit(0) # Indicate complete success
+        print(f"\\nAll {vulnerabilities_fixed} vulnerabilities found have been fixed!")
+        sys.exit(0)
     elif vulnerabilities_fixed > 0:
-        print(f"\nSuccessfully fixed {vulnerabilities_fixed} out of {vulnerabilities_found} vulnerabilities. Review remaining issues.")
-        sys.exit(0) # Indicate partial success, will still trigger rebuild/rescan
+        print(f"\\nSuccessfully fixed {vulnerabilities_fixed} out of {vulnerabilities_found} vulnerabilities. Review remaining issues.")
+        sys.exit(0)
     else:
-        print(f"\nCould not automatically fix any of the {vulnerabilities_found} vulnerabilities.")
-        sys.exit(1) # Indicate failure, no fixes applied
+        print(f"\\nCould not automatically fix any of the {vulnerabilities_found} vulnerabilities.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

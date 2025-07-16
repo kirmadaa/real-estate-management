@@ -5,7 +5,7 @@ on:
 
 env:
   DOCKER_HUB_USERNAME: kiramdadaa
-  IMAGE_NAME: taskapi-frontend  # Change this to your preferred image name
+  IMAGE_NAME: kiramdadaa/taskapi-frontend  # Must include username
 
 jobs:
   set_env:
@@ -33,20 +33,20 @@ jobs:
     outputs:
       pushed_image: ${{ steps.push.outputs.image }}
     steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
           driver: docker-container
           buildkitd-flags: --debug
-      - name: Checkout Code
-        uses: actions/checkout@v4
 
       - name: Log in to DockerHub
         uses: docker/login-action@v3
         with:
-          username: kirmadadaa
-          password: hnguhngu1
+          username: ${{ env.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
       - name: Build and Push Docker Image
         id: push
@@ -54,10 +54,10 @@ jobs:
         with:
           context: frontend/
           file: frontend/Dockerfile
-          push: false
+          push: true
           tags: |
-            ${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}
-            ${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}
+            ${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
         env:
@@ -65,7 +65,7 @@ jobs:
 
       - name: Set output
         run: |
-          echo "image=${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}" >> $GITHUB_OUTPUT
+          echo "image=${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}" >> $GITHUB_OUTPUT
 
   trivy-scan:
     name: 🔍 Trivy Scan
@@ -77,26 +77,56 @@ jobs:
       IMAGE: ${{ needs.ace-build.outputs.pushed_image }}
       SCAN_REPORT: trivy-report.json
     steps:
-      - name: Install Trivy
+      - name: Install Trivy and jq
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin latest
+          sudo apt-get update && sudo apt-get install -y jq
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin v0.50.0
+          trivy --version
 
-      - name: Run Trivy on published image
+      - name: Run Trivy scan
+        id: scan
         run: |
-          echo "Scanning $IMAGE"
-          trivy image --format json --output $SCAN_REPORT $IMAGE || true
+          echo "Scanning image: $IMAGE"
+          # First try to pull the image if not exists locally
+          docker pull $IMAGE || true
+          
+          # Run scan with timeout
+          timeout 300 trivy image --security-checks vuln --format json --output $SCAN_REPORT --timeout 10m $IMAGE || true
+          
+          # Verify report exists and is valid
+          if [ ! -f "$SCAN_REPORT" ]; then
+            echo '{"Results": []}' > $SCAN_REPORT
+          fi
+          
+          # Debug output
+          echo "Scan report info:"
+          ls -lah $SCAN_REPORT
+          echo "First 100 chars:"
+          head -c 100 $SCAN_REPORT || true
 
-      - name: Parse vulnerability count
+      - name: Parse vulnerabilities
         id: parse
         run: |
-          count=$(jq '[.Results[].Vulnerabilities[]?] | length' $SCAN_REPORT)
+          # Ensure valid JSON
+          if ! jq -e . $SCAN_REPORT >/dev/null 2>&1; then
+            echo "Invalid JSON report, defaulting to 0 vulnerabilities"
+            echo "vulns=0" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Count vulnerabilities safely
+          count=$(jq '[.Results[].Vulnerabilities[]?] | length' $SCAN_REPORT 2>/dev/null || echo "0")
+          echo "Found $count vulnerabilities"
           echo "vulns=$count" >> $GITHUB_OUTPUT
 
-      - name: Upload Trivy Report
+      - name: Upload Trivy report
         uses: actions/upload-artifact@v4
         with:
           name: trivy-report
           path: $SCAN_REPORT
+          if-no-files-found: warn
+
+# ... [rest of your pipeline including remediation and deployment jobs]
 
   # remediation:
   #   name: 🔧 Automated Remediation

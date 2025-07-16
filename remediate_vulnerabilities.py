@@ -98,15 +98,12 @@ def apply_remediation(vulnerability):
     fixed_version = vulnerability['fixed_version']
     target = vulnerability['target']
 
-    if "python" in target.lower() and "requirements.txt" in target.lower():
+    if "python-pkg" in vulnerability.get('Type', '').lower() or \
+       "usr/local/lib/python3.9/site-packages" in target.lower(): # More robust check for python packages
         print(f"Attempting to remediate Python package: {pkg_name} to {fixed_version}")
         return update_python_requirements(pkg_name, fixed_version)
-    elif "os" in target.lower() and "library" in target.lower():
-        # For OS level packages, direct modification of Dockerfile for specific `RUN apt-get install`
-        # is complex and specific. Best practice is to update the base image.
-        # This part requires manual intervention or a more sophisticated Dockerfile parser.
-        # For this demo, we'll focus on application dependencies.
-        print(f"OS package remediation for {pkg_name} requires Dockerfile modification or base image update. Skipping automated fix.")
+    elif "debian" in target.lower() or "os" in target.lower():
+        print(f"OS package remediation for {pkg_name} requires Dockerfile base image update. Skipping automated fix in script.")
         return False
     else:
         print(f"Unsupported target type for automatic remediation: {target}")

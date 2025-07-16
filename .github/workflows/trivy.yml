@@ -77,34 +77,39 @@ jobs:
     name: 🔍 Trivy Security Scan
     needs: docker_build_push
     runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: ${{ needs.set_env.outputs.image_name }}
+      IMAGE_TAG: ${{ needs.set_env.outputs.image_tag }}
     steps:
-      - name: Install Trivy
+      - name: Install Trivy with DB download
         run: |
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
           trivy --version
+          trivy image --download-db-only  # Pre-download DB to avoid timeout
 
       - name: Scan Docker Image
         run: |
           trivy image \
-            --security-checks vuln \
+            --scanners vuln \  # Updated from deprecated --security-checks
             --format table \
             --exit-code 0 \
-            ${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}
+            --timeout 10m \  # Increased timeout
+            $IMAGE_NAME:$IMAGE_TAG
 
       - name: Generate JSON Report
         run: |
           trivy image \
-            --security-checks vuln \
+            --scanners vuln \
             --format json \
             --output trivy-report.json \
-            ${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}
+            --timeout 10m \
+            $IMAGE_NAME:$IMAGE_TAG
 
       - name: Upload Scan Report
         uses: actions/upload-artifact@v4
         with:
           name: trivy-security-report
           path: trivy-report.json
-# ... [rest of your pipeline including remediation and deployment jobs]
 
   # remediation:
   #   name: 🔧 Automated Remediation

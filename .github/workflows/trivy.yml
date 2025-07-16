@@ -2,9 +2,13 @@ name: TaskApi - Docker Build, Push, and Security Scan
 
 on:
   workflow_dispatch:
+  push: # Trigger on push to main/master for automated fixes
+    branches:
+      - main
+      - master
 
 env:
-  IMAGE_NAME: kirmadadaa/taskapi-frontend  # Ensures correct formatting
+  IMAGE_NAME: kirmadadaa/taskapi-frontend # Ensures correct formatting
 
 jobs:
   set_env:
@@ -14,16 +18,18 @@ jobs:
       image_name: ${{ steps.setvars.outputs.image_name }}
       image_tag: ${{ steps.setvars.outputs.image_tag }}
       checkout_branch: ${{ steps.setvars.outputs.checkout_branch }}
+      run_id: ${{ github.run_id }} # Pass run ID for artifact download
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-  
+
       - name: Set environment variables
         id: setvars
         run: |
           echo "image_name=${{ env.IMAGE_NAME }}" >> $GITHUB_OUTPUT
           echo "image_tag=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
           echo "checkout_branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+          echo "run_id=${GITHUB_RUN_ID}" >> $GITHUB_OUTPUT # Capture run ID
 
   docker_build_push:
     name: 🐳 Build and Push Docker Image
@@ -44,7 +50,7 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      
+
       - name: Verify Docker Hub login
         run: |
           echo "Logged in as:"
@@ -64,7 +70,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            BUILDKIT_PROGRESS=plain  # Detailed build logs
+            BUILDKIT_PROGRESS=plain # Detailed build logs
         env:
           DOCKER_BUILDKIT: 1
 
@@ -75,8 +81,12 @@ jobs:
 
   trivy_scan:
     name: 🔍 Trivy Security Scan
-    needs: [set_env, docker_build_push]  # Explicitly depend on both
+    needs: [set_env, docker_build_push] # Explicitly depend on both
     runs-on: ubuntu-latest
+    outputs:
+      # Output a flag to indicate if vulnerabilities were found.
+      # This needs to be parsed from the report by a script, not directly by Trivy.
+      vulnerabilities_found: ${{ steps.check_vulns.outputs.found }}
     steps:
       - name: Set image variables
         id: vars
@@ -85,12 +95,12 @@ jobs:
           echo "IMAGE_TAG=${{ needs.set_env.outputs.image_tag }}" >> $GITHUB_ENV
           echo "Set IMAGE_NAME=${{ needs.set_env.outputs.image_name }}"
           echo "Set IMAGE_TAG=${{ needs.set_env.outputs.image_tag }}"
-  
+
       - name: Install Trivy
         run: |
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
           trivy --version
-  
+
       - name: Verify variables
         run: |
           echo "Image to scan: ${IMAGE_NAME}:${IMAGE_TAG}"
@@ -98,12 +108,12 @@ jobs:
             echo "ERROR: Image name or tag is empty!"
             exit 1
           fi
-  
+
       - name: Pull Docker image
         run: |
           docker pull ${IMAGE_NAME}:${IMAGE_TAG} || (echo "ERROR: Failed to pull image"; exit 1)
-  
-      - name: Scan with Trivy
+
+      - name: Scan with Trivy (Table format for logs)
         run: |
           trivy image \
             --scanners vuln \
@@ -111,75 +121,161 @@ jobs:
             --exit-code 0 \
             --timeout 10m \
             "${IMAGE_NAME}:${IMAGE_TAG}"
-  
+
       - name: Generate JSON report
+        id: generate_json_report
         run: |
           trivy image \
             --scanners vuln \
             --format json \
             --output trivy-report.json \
             "${IMAGE_NAME}:${IMAGE_TAG}"
-  
+          
+          # Check if any vulnerabilities exist in the JSON report
+          if jq -e '.[] | select(.Vulnerabilities != null and .Vulnerabilities | length > 0)' trivy-report.json > /dev/null; then
+            echo "Vulnerabilities found!"
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "No vulnerabilities found in this scan."
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Upload report
         uses: actions/upload-artifact@v4
         with:
           name: trivy-security-report
           path: trivy-report.json
 
-  # remediation:
-  #   name: 🔧 Automated Remediation
-  #   needs: [set_env, trivy-scan]
-  #   if: needs.trivy-scan.outputs.vulns != '0'
-  #   runs-on: ubuntu-latest
-  #   env:
-  #     BRANCH: ${{ needs.set_env.outputs.checkout_branch }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ env.BRANCH }}
+  remediation:
+    name: 🔧 Automated Remediation
+    needs: [set_env, trivy_scan]
+    if: needs.trivy_scan.outputs.vulnerabilities_found == 'true' # Only run if vulns were found
+    runs-on: ubuntu-latest
+    env:
+      BRANCH: ${{ needs.set_env.outputs.checkout_branch }}
+      RUN_ID: ${{ needs.set_env.outputs.run_id }} # Access the run_id from set_env
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
 
-  #     - name: Run remediation script
-  #       run: |
-  #         chmod +x .github/scripts/remediate.sh
-  #         ./.github/scripts/remediate.sh
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
 
-  #     - name: Commit & push fixes
-  #       run: |
-  #         git config user.name "github-actions[bot]"
-  #         git config user.email "github-actions[bot]@users.noreply.github.com"
-  #         git add frontend/Dockerfile package.json requirements.txt || true
-  #         git commit -m "Automated remediation fixes" || echo "No changes to commit"
-  #         git push origin $BRANCH
+      - name: Install npm
+        run: |
+          sudo apt-get update && sudo apt-get install -y npm
+
+      - name: Download Trivy report artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-security-report
+          path: . # Downloads to current directory
+
+      - name: Make script executable
+        run: chmod +x .github/scripts/remediate.py
+
+      - name: Run remediation script
+        id: run_remediation
+        continue-on-error: true # Allow subsequent steps to run even if remediation fails partially
+        run: |
+          python .github/scripts/remediate.py
+          if [ $? -eq 0 ]; then
+            echo "remediation_status=success" >> $GITHUB_OUTPUT
+          else
+            echo "remediation_status=failure" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check for changes after remediation
+        id: git_status
+        run: |
+          git add . # Stage all changes, including package-lock.json if updated
+          git diff --cached --exit-code || (echo "changes_made=true" >> $GITHUB_OUTPUT && echo "Repository changes detected.")
+          git restore --staged . # Unstage changes so 'add-commit' action handles it
+
+      - name: Commit & push fixes (if changes detected)
+        if: steps.git_status.outputs.changes_made == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "feat(security): Automated vulnerability remediation by Trivy report"
+          branch: ${{ env.BRANCH }}
+          # Force push is dangerous but sometimes needed for automated branches if rebase happens.
+          # Better to open a PR for review. For full automation, enable with caution.
+          # For this example, we'll auto-commit directly. Consider 'create-pull-request' action instead.
+          # commit_options: '--no-verify' # Skip pre-commit hooks if necessary
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Default token has write access
+
+      - name: Rebuild and Re-scan to Validate Fixes (if changes made)
+        if: steps.git_status.outputs.changes_made == 'true'
+        run: |
+          echo "Rebuilding and re-scanning image to validate fixes..."
+          # Re-trigger build and scan (can be done by dispatching another workflow, or just inline here)
+          # For simplicity and immediacy, we'll do inline build/scan here.
+          # In a complex scenario, you might dispatch a new workflow run for the updated branch.
+          
+          # Rebuild Docker image
+          docker build -t ${{ env.IMAGE_NAME }}:remediated-${{ github.sha }} frontend/ -f frontend/Dockerfile
+          
+          # Re-scan the remediated image
+          trivy image \
+            --scanners vuln \
+            --format json \
+            --output trivy-remediated-report.json \
+            "${{ env.IMAGE_NAME }}:remediated-${{ github.sha }}" || true # Don't fail on exit code
+          
+          # Check if vulnerabilities persist after remediation
+          if jq -e '.[] | select(.Vulnerabilities != null and .Vulnerabilities | length > 0)' trivy-remediated-report.json > /dev/null; then
+            echo "Vulnerabilities still present after remediation. Manual review needed."
+            echo "remediation_validation=failure" >> $GITHUB_OUTPUT
+          else
+            echo "Image is clean after remediation. Great success!"
+            echo "remediation_validation=success" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload remediated report
+        if: steps.git_status.outputs.changes_made == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-remediated-security-report
+          path: trivy-remediated-report.json
+          
+      - name: Notify Slack (Remediation Status)
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }} # Set this as a GitHub Secret
+          SLACK_CHANNEL: '#devsecops-alerts' # Or your desired channel
+          SLACK_USERNAME: 'Vulnerability Remediation Bot'
+          SLACK_ICON_EMOJI: ':robot_face:'
+          SLACK_MESSAGE: |
+            *Automated Vulnerability Remediation Attempt Result*
+            Repository: `${{ github.repository }}`
+            Branch: `${{ env.BRANCH }}`
+            Workflow Run: <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_id }}>
+            
+            Status: ${{ steps.run_remediation.outputs.remediation_status }}
+            ${{ steps.git_status.outputs.changes_made == 'true' && format('Validation Scan: {0}', steps.remediation.outputs.remediation_validation) || 'No changes made by remediation.' }}
+            
+            ${{ steps.git_status.outputs.changes_made == 'true' && 'Fixed files committed. New scan results attached as artifact.' || 'No fixes applied or no changes detected.' }}
+            ${{ steps.run_remediation.outputs.remediation_status == 'failure' && '🚨 Remediation failed or partial. Manual intervention required.' || '' }}
+        if: always() # Ensure notification even if previous steps fail
 
   # Uncomment and modify these deployment jobs as needed
+  # They should depend on `remediation` and check its `remediation_validation` output
   # ccli_hydra_e1_deployment:
   #   name: 🚀🟡 Deploy image to E1 Hydra
-  #   needs: [set_env, ace-build, trivy-scan]
+  #   needs: [set_env, docker_build_push, trivy_scan, remediation] # Add remediation as a dependency
+  #   # Only deploy if no vulns were found initially OR remediation was successful and validated
+  #   if: needs.trivy_scan.outputs.vulnerabilities_found == 'false' || (needs.remediation.outputs.remediation_status == 'success' && needs.remediation.outputs.remediation_validation == 'success')
   #   uses: amex-eng/ace-platform-reusable-workflow/.github/workflows/deploy_to_hydra_ccli_validate.yml@main
   #   with:
   #     image_name_ccli: artifactory.aexp.com/dockerproxy/${{ needs.set_env.outputs.image_name }}
-  #     sha256: ${{ needs.ace-build.outputs.pushed_image }}
+  #     sha256: ${{ needs.ace-build.outputs.pushed_image }} # Adjust based on actual output from build step if needed
   #     regions: US
   #     env: "E1"
-  #     project: ${{ vars.PROJECT }}
-  #     service: ${{ vars.SERVICE }}
-  #     image_time_stamp: ${{ needs.set_env.outputs.image_tag }}
-  #   secrets:
-  #     SE_USERNAME: ${{ secrets.SE_USERNAME }}
-  #     SE_PASSWORD: ${{ secrets.SE_PASSWORD }}
-  #     ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
-  #     ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
-
-  # ccli_hydra_e2_deployment:
-  #   name: 🚀🟠 Deploy image to E2 Hydra
-  #   needs: [set_env, ace-build, trivy-scan, ccli_hydra_e1_deployment]
-  #   uses: amex-eng/ace-platform-reusable-workflow/.github/workflows/deploy_to_hydra_ccli_validate.yml@main
-  #   with:
-  #     image_name_ccli: artifactory.aexp.com/dockerproxy/${{ needs.set_env.outputs.image_name }}
-  #     sha256: ${{ needs.ace-build.outputs.pushed_image }}
-  #     regions: US
-  #     env: "E2"
   #     project: ${{ vars.PROJECT }}
   #     service: ${{ vars.SERVICE }}
   #     image_time_stamp: ${{ needs.set_env.outputs.image_tag }}

@@ -198,8 +198,8 @@ def harden_dockerfile(dockerfile_path):
         return False
 
 def main():
-    # Expect dockerfile_path and app_root_dir as command line arguments
-    if len(sys.argv) < 3:
+    # Expect trivy_report.json, dockerfile_path, and app_root_dir as command line arguments
+    if len(sys.argv) < 4: # Changed from < 3 to < 4 as now expecting 3 arguments
         print("Usage: python remediate.py <trivy_report.json> <dockerfile_path> <app_root_dir>")
         sys.exit(1)
 
@@ -212,9 +212,9 @@ def main():
         print(f"Trivy report not found at {report_path}. Exiting.")
         sys.exit(1)
     if not os.path.exists(dockerfile_path):
-        print(f"Dockerfile not found at {dockerfile_path}. Exiting.")
+        print(f"Dockerfile not found at {dockerfile_path}. Proceeding but OS fixes may be limited.")
         # We allow to continue if Dockerfile is not found, but it limits OS fixes
-        # sys.exit(1)
+        # sys.exit(1) # Removed exit, allowing partial fixes
     if not os.path.isdir(app_root_dir):
         print(f"Application root directory not found at {app_root_dir}. Exiting.")
         sys.exit(1)
@@ -230,7 +230,8 @@ def main():
     vulnerabilities_fixed = 0
     repo_changed = False # Track if any file in the repo was changed
 
-    for result in report:
+    # CORRECTED: Iterate over the 'Results' list within the report
+    for result in report.get("Results", []):
         target = result.get("Target", "")
         vulnerabilities = result.get("Vulnerabilities", [])
 
@@ -357,7 +358,4 @@ def main():
         sys.exit(1) # Indicate failure, no fixes applied
 
 if __name__ == "__main__":
-    # Pass trivy_report.json, dockerfile_path, and app_root_dir as arguments
-    # For now, trivy-report.json is assumed to be in the current working directory
-    # The GitHub Actions workflow will pass the dockerfile_path and app_root_dir
     main()

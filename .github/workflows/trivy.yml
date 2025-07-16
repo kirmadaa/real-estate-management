@@ -238,7 +238,7 @@ jobs:
         run: |
           # The Python script will read its inputs from environment variables
           # as configured in the 'env:' block of this job.
-          python .github/scripts/remitest.py
+          python .github/scripts/reditest.py
 
       - name: Check for changes after remediation script
         id: git_status_check

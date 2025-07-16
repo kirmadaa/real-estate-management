@@ -53,7 +53,7 @@ jobs:
         run: |
           img="kiradadaa:${{ needs.set_env.outputs.image_tag }}"
           docker push "$img"
-          docker push "${{ needs.set_env.outputs.image_name }}:latest"
+          docker push "kirmadadaa:latest"
           echo "image=${img}" >> $GITHUB_OUTPUT
 
   trivy-scan:

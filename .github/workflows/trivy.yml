@@ -24,10 +24,8 @@ jobs:
       image_tag: ${{ steps.setvars.outputs.image_tag }}
       checkout_branch: ${{ steps.setvars.outputs.checkout_branch }}
       run_id: ${{ github.run_id }} # Pass run ID for artifact download
-      # --- FIX: Add Dockerfile and root directory as outputs ---
       app_dockerfile_path: ${{ steps.setvars.outputs.app_dockerfile_path }}
       app_root_directory: ${{ steps.setvars.outputs.app_root_directory }}
-      # --- END FIX ---
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -39,10 +37,8 @@ jobs:
           echo "image_tag=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
           echo "checkout_branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
           echo "run_id=${GITHUB_RUN_ID}" >> $GITHUB_OUTPUT # Capture run ID
-          # --- FIX: Pass Dockerfile and root directory from workflow env to outputs ---
           echo "app_dockerfile_path=${{ env.DEFAULT_APP_DOCKERFILE_PATH }}" >> $GITHUB_OUTPUT
           echo "app_root_directory=${{ env.DEFAULT_APP_ROOT_DIRECTORY }}" >> $GITHUB_OUTPUT
-          # --- END FIX ---
 
   docker_build_push:
     name: 🐳 Build and Push Docker Image
@@ -74,10 +70,8 @@ jobs:
         id: push
         uses: docker/build-push-action@v5
         with:
-          # --- FIX: Access APP_ROOT_DIRECTORY and APP_DOCKERFILE_PATH from set_env outputs ---
-          context: ${{ needs.set_env.outputs.app_root_directory }} # Use dynamic path from outputs
-          file: ${{ needs.set_env.outputs.app_dockerfile_path }}    # Use dynamic path from outputs
-          # --- END FIX ---
+          context: ${{ needs.set_env.outputs.app_root_directory }}
+          file: ${{ needs.set_env.outputs.app_dockerfile_path }}
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}
@@ -166,12 +160,13 @@ jobs:
     env:
       BRANCH: ${{ needs.set_env.outputs.checkout_branch }}
       RUN_ID: ${{ needs.set_env.outputs.run_id }}
-      # --- FIX: Pass these dynamic paths to remediation job for consistent use from set_env outputs ---
-      APP_DOCKERFILE_PATH: ${{ needs.set_env.outputs.app_dockerfile_path }}
-      APP_ROOT_DIRECTORY: ${{ needs.set_env.outputs.app_root_directory }}
-      # --- END FIX ---
       IMAGE_NAME: ${{ needs.set_env.outputs.image_name }}
       IMAGE_TAG: ${{ needs.set_env.outputs.image_tag }}
+      # --- FIX: Pass these dynamic paths as ENVIRONMENT VARIABLES for the script ---
+      TRIVY_REPORT_PATH: trivy-report.json # This file is downloaded to current directory
+      DOCKERFILE_PATH: ${{ needs.set_env.outputs.app_dockerfile_path }}
+      APP_ROOT_DIR: ${{ needs.set_env.outputs.app_root_directory }}
+      # --- END FIX ---
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -186,45 +181,49 @@ jobs:
       - name: Install JQ for JSON parsing
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      # --- START FIX: Install Trivy in Remediation Job ---
       - name: Install Trivy for re-validation
         run: |
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
           trivy --version
-      # --- END FIX ---
 
       - name: Install npm (if needed for Node.js projects)
         run: |
-          if [ -f "${{ env.APP_ROOT_DIRECTORY }}/package.json" ]; then
+          # Check if package.json exists in the specified APP_ROOT_DIR
+          if [ -f "${{ env.APP_ROOT_DIR }}/package.json" ]; then
+            echo "package.json detected. Installing npm."
             sudo apt-get install -y npm
-            # npm config set unsafe-perm true # Potentially needed for global npm installs as root
+            # npm config set unsafe-perm true # Potentially needed for global npm installs as root, depending on runner permissions
+          else
+            echo "package.json not detected in ${{ env.APP_ROOT_DIR }}. Skipping npm installation."
           fi
 
-      # Example for Go:
-      # - name: Set up Go (if needed for Go projects)
-      #   uses: actions/setup-go@v5
-      #   with:
-      #     go-version: '1.x'
+      # --- FIX: Uncomment and configure Go setup ---
+      - name: Set up Go (if needed for Go projects)
+        # Check if go.mod exists in the specified APP_ROOT_DIR
+        if: ${{ runner.os == 'Linux' && format('{0}/go.mod', env.APP_ROOT_DIR) && github.repository_owner == github.repository_owner }} # Simplified check. Better check with 'if: -f go.mod' in shell, but this is a rough guard.
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.x' # Use a specific version like '1.22' or '1.x' for latest
+      # --- END FIX ---
 
       - name: Download Trivy report artifact
         uses: actions/download-artifact@v4
         with:
           name: trivy-security-report
-          path: .
+          path: . # Downloads trivy-report.json to the current directory
 
       - name: Make remediation script executable
         run: chmod +x .github/scripts/reditest.py
 
       - name: Run remediation script
         id: run_remediation
-        continue-on-error: true
+        continue-on-error: true # Allow subsequent steps to run even if remediation fails
         run: |
-          # The Python script will modify files in APP_ROOT_DIRECTORY (e.g., package.json, Dockerfile)
-          python .github/scripts/reditest.py \
-            trivy-report.json \
-            "${{ env.APP_DOCKERFILE_PATH }}" \
-            "${{ env.APP_ROOT_DIRECTORY }}"
-
+          # The Python script will read its inputs from environment variables
+          # as configured in the 'env:' block of this job.
+          python .github/scripts/reditest.py
+          
+          # Capture the exit code of the python script
           if [ $? -eq 0 ]; then
             echo "remediation_status=success" >> $GITHUB_OUTPUT
           else
@@ -256,6 +255,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Rebuild and Re-scan to Validate Fixes (if changes made)
+        id: rebuild_and_rescan # Give this step an ID to reference its outputs
         if: steps.git_status.outputs.changes_made == 'true'
         run: |
           echo "Rebuilding and re-scanning image to validate fixes..."
@@ -264,8 +264,8 @@ jobs:
 
           # Build the remediated image with a new tag
           docker build -t "${{ env.IMAGE_NAME }}:remediated-${{ github.sha }}" \
-            -f "${{ env.APP_DOCKERFILE_PATH }}" \
-            "${{ env.APP_ROOT_DIRECTORY }}"
+            -f "${{ env.DOCKERFILE_PATH }}" \
+            "${{ env.APP_ROOT_DIR }}"
 
           # Scan the newly built remediated image
           trivy image \
@@ -289,15 +289,12 @@ jobs:
           name: trivy-remediated-security-report
           path: trivy-remediated-report.json
 
-      # Add this step to ensure the remediation validation status is passed out
       - name: Set remediation validation output
         id: set_remediation_validation_output
         # This output needs to be populated based on the previous step's output (Rebuild and Re-scan)
-        # Use an 'if' condition to ensure it only runs if the rebuild/re-scan step ran
-        if: steps.git_status.outputs.changes_made == 'true'
+        if: steps.git_status.outputs.changes_made == 'true' # Only run if changes were made and validation occurred
         run: |
           echo "remediation_validation=${{ steps.rebuild_and_rescan.outputs.remediation_validation }}" >> $GITHUB_OUTPUT
-
 
       # - name: Notify Slack (Remediation Status)
       #   uses: rtCamp/action-slack-notify@v2

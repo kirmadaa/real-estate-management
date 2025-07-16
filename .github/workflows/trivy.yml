@@ -73,51 +73,57 @@ jobs:
           echo "Pushed image: ${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}"
           docker pull ${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }} || echo "Pull test failed"
 
-  trivy_scan:
-    name: 🔍 Trivy Security Scan
-    needs: docker_build_push
-    runs-on: ubuntu-latest
-    env:
-      IMAGE_NAME: ${{ needs.set_env.outputs.image_name }}
-      IMAGE_TAG: ${{ needs.set_env.outputs.image_tag }}
-    steps:
-      - name: Install Trivy with DB download
-        run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
-          trivy --version
-          trivy image --download-db-only
+trivy_scan:
+  name: 🔍 Trivy Security Scan
+  needs: docker_build_push
+  runs-on: ubuntu-latest
+  env:
+    IMAGE_NAME: ${{ needs.set_env.outputs.image_name }}
+    IMAGE_TAG: ${{ needs.set_env.outputs.image_tag }}
+  steps:
+    - name: Install Trivy with DB download
+      run: |
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+        trivy --version
+        trivy image --download-db-only
 
-      - name: Verify image name and tag
-        run: |
-          echo "Scanning image: $IMAGE_NAME:$IMAGE_TAG"
-          if [ -z "$IMAGE_NAME" ] || [ -z "$IMAGE_TAG" ]; then
-            echo "ERROR: Image name or tag is empty!"
-            exit 1
-          fi
+    - name: Verify Docker image exists
+      run: |
+        echo "Attempting to pull image: $IMAGE_NAME:$IMAGE_TAG"
+        docker pull $IMAGE_NAME:$IMAGE_TAG || (echo "ERROR: Failed to pull image"; exit 1)
+        echo "Image exists and is accessible"
 
-      - name: Scan Docker Image
-        run: |
-          trivy image \
-            --scanners vuln \
-            --format table \
-            --exit-code 0 \
-            --timeout 10m \
-            "$IMAGE_NAME:$IMAGE_TAG"
+    - name: Verify image name and tag
+      run: |
+        echo "Scanning image: $IMAGE_NAME:$IMAGE_TAG"
+        if [ -z "$IMAGE_NAME" ] || [ -z "$IMAGE_TAG" ]; then
+          echo "ERROR: Image name or tag is empty!"
+          exit 1
+        fi
 
-      - name: Generate JSON Report
-        run: |
-          trivy image \
-            --scanners vuln \
-            --format json \
-            --output trivy-report.json \
-            --timeout 10m \
-            "$IMAGE_NAME:$IMAGE_TAG"
+    - name: Scan Docker Image
+      run: |
+        trivy image \
+          --scanners vuln \
+          --format table \
+          --exit-code 0 \
+          --timeout 10m \
+          "$IMAGE_NAME:$IMAGE_TAG"
 
-      - name: Upload Scan Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-security-report
-          path: trivy-report.json
+    - name: Generate JSON Report
+      run: |
+        trivy image \
+          --scanners vuln \
+          --format json \
+          --output trivy-report.json \
+          --timeout 10m \
+          "$IMAGE_NAME:$IMAGE_TAG"
+
+    - name: Upload Scan Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: trivy-security-report
+        path: trivy-report.json
 
   # remediation:
   #   name: 🔧 Automated Remediation

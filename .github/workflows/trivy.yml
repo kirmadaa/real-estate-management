@@ -42,7 +42,7 @@ jobs:
       - name: Build Docker Image
         id: build
         run: |
-          img="${{ needs.set_env.outputs.image_name }}:${{ needs.set_env.outputs.image_tag }}"
+          img="kiramdadaa:${{ needs.set_env.outputs.image_tag }}"
           # Fixed: Use -f flag to specify Dockerfile location, removed duplicate -t
           docker build -f frontend/Dockerfile -t "$img" frontend/
           docker tag "$img" "${{ needs.set_env.outputs.image_name }}:latest"

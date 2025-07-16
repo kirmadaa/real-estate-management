@@ -54,7 +54,7 @@ jobs:
         with:
           context: frontend/
           file: frontend/Dockerfile
-          push: true
+          push: false
           tags: |
             ${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}
             ${{ env.IMAGE_NAME }}:latest
@@ -80,7 +80,7 @@ jobs:
       - name: Install Trivy and jq
         run: |
           sudo apt-get update && sudo apt-get install -y jq
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin v0.50.0
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin latest
           trivy --version
 
       - name: Run Trivy scan

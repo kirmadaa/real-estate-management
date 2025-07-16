@@ -33,6 +33,12 @@ jobs:
     outputs:
       pushed_image: ${{ steps.push.outputs.image }}
     steps:
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+          buildkitd-flags: --debug
       - name: Checkout Code
         uses: actions/checkout@v4
 

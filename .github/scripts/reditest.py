@@ -486,13 +486,8 @@ def build_docker_image(dockerfile_path, image_name, app_root_dir):
     """
     logging.info(f"Attempting to build Docker image '{image_name}' from {dockerfile_path}")
     
-    # Ensure Dockerfile path is relative to context if app_root_dir is specified
-    # The 'docker build' command expects -f to be relative to the context or absolute.
-    # If dockerfile_path is 'frontend/Dockerfile' and app_root_dir is 'frontend/',
-    # then the -f path needs to be 'Dockerfile' when cwd is 'frontend/'.
-    # If app_root_dir is repo root and dockerfile_path is 'frontend/Dockerfile', then -f 'frontend/Dockerfile'.
-    
     # Determine the effective Dockerfile path for the build command
+    # This path needs to be relative to the build context (app_root_dir)
     effective_dockerfile_path = os.path.relpath(dockerfile_path, start=app_root_dir) \
                                 if os.path.commonpath([app_root_dir, dockerfile_path]) == app_root_dir \
                                 else dockerfile_path # Keep as is if not a subpath
@@ -589,20 +584,26 @@ def commit_changes_to_git(app_root_dir, commit_message):
 def main():
     # Retrieve paths from environment variables, typically set by GitHub Actions
     # Provide robust defaults
-    report_path = os.environ.get('TRIVY_REPORT_PATH', 'trivy-report.json')
-    dockerfile_path = os.environ.get('DOCKERFILE_PATH', 'Dockerfile')
-    app_root_dir = os.environ.get('APP_ROOT_DIR', os.getcwd()) # Default to current working directory
+    # Get the repository root, which is the current working directory of the action runner
+    repo_root = os.getcwd() 
+
+    # APP_ROOT_DIR and DOCKERFILE_PATH are passed from GitHub Actions relative to repo_root
+    app_root_dir_env = os.environ.get('APP_ROOT_DIR', '.') # Default to '.' if not set
+    dockerfile_path_env = os.environ.get('DOCKERFILE_PATH', 'Dockerfile') # Default 'Dockerfile'
+
+    # Resolve these to absolute paths based on the repo_root
+    app_root_dir = os.path.abspath(os.path.join(repo_root, app_root_dir_env))
+    dockerfile_path = os.path.abspath(os.path.join(repo_root, dockerfile_path_env))
+
+    report_path = os.path.join(repo_root, os.environ.get('TRIVY_REPORT_PATH', 'trivy-report.json')) # Ensure report path is also absolute
     
     # Define remediated image name (ensure it's distinct for re-scanning)
     base_image_name = os.environ.get('IMAGE_NAME', 'my-app') # From workflow env
     image_tag = os.environ.get('IMAGE_TAG', 'latest') # From workflow env (original image tag)
     remediated_image_name = f"{base_image_name}:remediated-{int(time.time())}" # New tag for remediated image
 
-    # Ensure app_root_dir is an absolute path for consistent behavior
-    app_root_dir = os.path.abspath(app_root_dir)
-    dockerfile_path = os.path.abspath(os.path.join(app_root_dir, dockerfile_path)) # Ensure full path for Dockerfile
-
-    logging.info(f"App Root Directory: {app_root_dir}")
+    logging.info(f"Repository Root Directory: {repo_root}")
+    logging.info(f"App Root Directory for Build Context: {app_root_dir}")
     logging.info(f"Dockerfile Path: {dockerfile_path}")
     logging.info(f"Trivy Report Path: {report_path}")
     logging.info(f"Original Image Name: {base_image_name}:{image_tag}")

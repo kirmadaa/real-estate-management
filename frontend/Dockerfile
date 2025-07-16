@@ -6,6 +6,6 @@ RUN npm install
 COPY . .
 RUN ng analytics off
 RUN npm run build 
-EXPOSE 4200
+\nUSER node\nEXPOSE 4200
 CMD ["ng", "serve", "--host", "0.0.0.0", "--port", "4200"]
 

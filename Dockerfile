@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-FROM python:3.9-slim-bookworm # Changed from python:3.9-slim-buster
+FROM python:3.9-slim-bookworm
 
 WORKDIR /app
 

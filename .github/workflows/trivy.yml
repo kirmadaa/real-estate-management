@@ -51,7 +51,7 @@ jobs:
       - name: Push Docker Image
         id: push
         run: |
-          img="${{ needs.set_env.outputs.image_name }}:${{ needs.set_env.outputs.image_tag }}"
+          img="kiradadaa:${{ needs.set_env.outputs.image_tag }}"
           docker push "$img"
           docker push "${{ needs.set_env.outputs.image_name }}:latest"
           echo "image=${img}" >> $GITHUB_OUTPUT

@@ -62,7 +62,7 @@ def update_dockerfile_base_image(dockerfile_path, current_image, fixed_image):
     logging.info(f"Attempting to update base image in {dockerfile_path} from '{current_image}' to '{fixed_image}'")
     
     if not os.path.exists(dockerfile_path):
-        logging.warning(f"Dockerfile '{dockerfile_path}' not found for update.")
+        logging.warning(f"Dockerfile '{dockerfile_path}' not found for update. Skipping.")
         return False
 
     try:
@@ -445,30 +445,57 @@ def harden_dockerfile(dockerfile_path):
 # --- NEW FUNCTION FOR INTERNET SEARCH AND FIX DISCOVERY ---
 def find_fix_online(vulnerability_id, package_name, installed_version, description, severity, current_base_image=None):
     """
-    Simulates online search for remediation information.
-    Prioritizes upgrading to a patched version of the *same distribution family*.
+    Searches the internet for remediation information for a given vulnerability.
+    Returns a dictionary with 'fixed_version' (if found) or 'remediation_advice'.
+    This is a mock-up function. In a real scenario, this would involve:
+    1. Querying public vulnerability databases (NVD, OSV, GHSA).
+    2. Parsing security advisories for fixed versions or recommended actions.
+    3. Potentially using AI/ML to infer fixes from unstructured text.
+    
+    Args:
+        current_base_image (str, optional): The current base image used in the Dockerfile, e.g., "node:18-slim".
     """
     logging.info(f"Simulating online search for fix for {vulnerability_id} (Package: {package_name}, Version: {installed_version})")
     
+    base_image_type = None
+    if current_base_image:
+        # Extract the primary identifier for the base image (e.g., 'node', 'debian', 'python')
+        # This is a simplification; robust parsing would be needed for real tags like 'python:3.9-slim-buster'
+        image_name_part = current_base_image.split(':')[0].lower()
+        if "node" in image_name_part:
+            base_image_type = "node"
+        elif "debian" in image_name_part:
+            base_image_type = "debian"
+        elif "alpine" in image_name_part:
+            base_image_type = "alpine"
+        elif "python" in image_name_part: # Added for more specific runtime images
+            base_image_type = "python"
+        elif "golang" in image_name_part: # Added for more specific runtime images
+            base_image_type = "golang"
+
     # Heuristic for OS-level vulnerabilities suggesting a base image upgrade
     if "linux kernel" in description.lower() or "linux-libc-dev" in package_name.lower() or "glibc" in package_name.lower() or "openssl" in package_name.lower():
         logging.info("Simulated: Found a recommended base image upgrade for a critical OS vulnerability.")
         
-        if current_base_image:
-            current_base_image_lower = current_base_image.lower()
-            if "node:" in current_base_image_lower:
-                logging.info(f"  Current base image is Node.js-based ('{current_base_image}'). Recommending a newer Node.js image.")
-                return {"type": "base_image_upgrade", "recommended_image": "node:20-slim"}
-            elif "debian:" in current_base_image_lower:
-                logging.info(f"  Current base image is Debian-based ('{current_base_image}'). Recommending a newer Debian slim image.")
-                return {"type": "base_image_upgrade", "recommended_image": "debian:12-slim"} # Use a valid, common tag
-            elif "alpine:" in current_base_image_lower:
-                 logging.info(f"  Current base image is Alpine-based ('{current_base_image}'). Recommending a newer Alpine slim image.")
-                 return {"type": "base_image_upgrade", "recommended_image": "alpine:3.19"}
-        
-        logging.info("  Could not identify specific base image type. Defaulting to generic Debian recommendation.")
-        return {"type": "base_image_upgrade", "recommended_image": "debian:12-slim"}
-    
+        if base_image_type == "node":
+            logging.info(f"  Current base image is Node.js-based. Recommending a newer Node.js image.")
+            return {"type": "base_image_upgrade", "recommended_image": "node:20-slim"} # Example of a recent LTS Node
+        elif base_image_type == "debian":
+            logging.info(f"  Current base image is Debian-based. Recommending a newer Debian slim image.")
+            return {"type": "base_image_upgrade", "recommended_image": "debian:12-slim"} # Use a valid, common tag
+        elif base_image_type == "alpine":
+             logging.info(f"  Current base image is Alpine-based. Recommending a newer Alpine slim image.")
+             return {"type": "base_image_upgrade", "recommended_image": "alpine:3.19"} # Example for Alpine
+        elif base_image_type == "python":
+            logging.info(f"  Current base image is Python-based. Recommending a newer Python slim image.")
+            return {"type": "base_image_upgrade", "recommended_image": "python:3.11-slim"} # Example Python version
+        elif base_image_type == "golang":
+            logging.info(f"  Current base image is Golang-based. Recommending a newer Golang slim image.")
+            return {"type": "base_image_upgrade", "recommended_image": "golang:1.22-alpine"} # Example Golang version
+        else: # Fallback for unknown or generic base images (e.g., if current_base_image was not provided or not recognized)
+            logging.info("  Could not identify specific base image type. Defaulting to generic Debian recommendation.")
+            return {"type": "base_image_upgrade", "recommended_image": "debian:12-slim"}
+
     # Heuristic 2: Specific common application dependency
     elif "git" in package_name.lower() and "file creation flaw" in description.lower():
          logging.info("Simulated: Found a specific git version fix.")
@@ -626,6 +653,20 @@ def main():
     dockerfile_exists = os.path.exists(dockerfile_path) and os.path.isfile(dockerfile_path)
     if not dockerfile_exists:
         logging.warning(f"Dockerfile not found at {dockerfile_path}. OS-level and Dockerfile hardening fixes will be limited or skipped.")
+        
+    current_dockerfile_base_image = None
+    if dockerfile_exists:
+        try:
+            with open(dockerfile_path, 'r', encoding='utf-8') as f:
+                dockerfile_content = f.read()
+            # Capture "FROM image:tag" potentially with "AS builder"
+            from_match = re.search(r"^\s*FROM\s+(\S+)(?:\s+AS\s+\S+)?\s*(#.*)?$", dockerfile_content, re.IGNORECASE | re.MULTILINE)
+            if from_match:
+                current_dockerfile_base_image = from_match.group(1).strip()
+                logging.info(f"Detected current Dockerfile base image: '{current_dockerfile_base_image}'")
+        except Exception as e:
+            logging.error(f"Error reading Dockerfile to find current base image for context-aware fixing: {e}")
+
 
     if not os.path.isdir(app_root_dir):
         logging.error(f"Application root directory not found at {app_root_dir}. Exiting with failure.")
@@ -703,24 +744,17 @@ def main():
         # 2. If not fixed by Trivy's suggestion or no suggestion, attempt online lookup
         if not fixed_current_vuln:
             logging.info(f"  [ATTEMPTING ONLINE FIX] {vuln_id} ({pkg_name}@{installed_version}): No Trivy-provided fix or direct fix failed. Searching online...")
-            online_fix_info = find_fix_online(vuln_id, pkg_name, installed_version, description, severity)
+            online_fix_info = find_fix_online(vuln_id, pkg_name, installed_version, description, severity, current_dockerfile_base_image)
 
             if online_fix_info["type"] == "base_image_upgrade" and dockerfile_exists:
-                current_base_image = None
-                try:
-                    with open(dockerfile_path, 'r', encoding='utf-8') as f:
-                        dockerfile_content = f.read()
-                    # Capture "FROM image:tag" potentially with "AS builder"
-                    from_match = re.search(r"^\s*FROM\s+(\S+)(?:\s+AS\s+\S+)?\s*(#.*)?$", dockerfile_content, re.IGNORECASE | re.MULTILINE)
-                    if from_match:
-                        current_base_image = from_match.group(1).strip()
-                except Exception as e:
-                    logging.error(f"Error reading Dockerfile to find current base image: {e}")
-                
-                if current_base_image and online_fix_info.get("recommended_image") and \
-                   online_fix_info["recommended_image"] != current_base_image:
+                # Use the current_dockerfile_base_image determined earlier
+                if current_dockerfile_base_image and online_fix_info.get("recommended_image") and \
+                   online_fix_info["recommended_image"] != current_dockerfile_base_image:
                     logging.info(f"    Online search recommends base image upgrade to: {online_fix_info['recommended_image']}")
-                    fixed_current_vuln = update_dockerfile_base_image(dockerfile_path, current_base_image, online_fix_info["recommended_image"])
+                    fixed_current_vuln = update_dockerfile_base_image(dockerfile_path, current_dockerfile_base_image, online_fix_info["recommended_image"])
+                else:
+                    logging.info(f"    Online search recommended base image change, but it's either the same or current base image not found.")
+
             elif online_fix_info["type"] == "package_upgrade":
                  new_fixed_version = online_fix_info.get("fixed_version")
                  if new_fixed_version:

@@ -1,8 +1,11 @@
-# .github/workflows/trivy-remediation-v2.yml
 name: TaskApi - E1 → E2 US Hydra with Trivy Remediation v2
 
 on:
   workflow_dispatch:
+
+env:
+  DOCKER_HUB_USERNAME: kiramdadaa
+  IMAGE_NAME: taskapi-frontend  # Change this to your preferred image name
 
 jobs:
   set_env:
@@ -19,7 +22,7 @@ jobs:
       - name: Set environment variables
         id: setvars
         run: |
-          echo "image_name=${{ github.repository }}" >> $GITHUB_OUTPUT
+          echo "image_name=${{ env.IMAGE_NAME }}" >> $GITHUB_OUTPUT
           echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
           echo "checkout_branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
@@ -39,22 +42,24 @@ jobs:
           username: kirmadadaa
           password: hnguhngu1
 
-      - name: Build Docker Image
-        id: build
-        run: |
-          img="kiramdadaa:${{ needs.set_env.outputs.image_tag }}"
-          # Fixed: Use -f flag to specify Dockerfile location, removed duplicate -t
-          docker build -f frontend/Dockerfile -t "$img" frontend/
-          docker tag "$img" "${{ needs.set_env.outputs.image_name }}:latest"
-          echo "Built $img and tagged as latest"
-
-      - name: Push Docker Image
+      - name: Build and Push Docker Image
         id: push
+        uses: docker/build-push-action@v5
+        with:
+          context: frontend/
+          file: frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}
+            ${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+        env:
+          DOCKER_BUILDKIT: 1
+
+      - name: Set output
         run: |
-          img="kiradadaa:${{ needs.set_env.outputs.image_tag }}"
-          docker push "$img"
-          docker push "kirmadadaa:latest"
-          echo "image=${img}" >> $GITHUB_OUTPUT
+          echo "image=${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.set_env.outputs.image_tag }}" >> $GITHUB_OUTPUT
 
   trivy-scan:
     name: 🔍 Trivy Scan
@@ -87,32 +92,33 @@ jobs:
           name: trivy-report
           path: $SCAN_REPORT
 
-  # remediation:
-  #   name: 🔧 Automated Remediation
-  #   needs: [set_env, trivy-scan]
-  #   if: needs.trivy-scan.outputs.vulns != '0'
-  #   runs-on: ubuntu-latest
-  #   env:
-  #     BRANCH: ${{ needs.set_env.outputs.checkout_branch }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ env.BRANCH }}
+  remediation:
+    name: 🔧 Automated Remediation
+    needs: [set_env, trivy-scan]
+    if: needs.trivy-scan.outputs.vulns != '0'
+    runs-on: ubuntu-latest
+    env:
+      BRANCH: ${{ needs.set_env.outputs.checkout_branch }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
 
-  #     - name: Run remediation script
-  #       run: |
-  #         chmod +x .github/scripts/remediate.sh
-  #         ./.github/scripts/remediate.sh
+      - name: Run remediation script
+        run: |
+          chmod +x .github/scripts/remediate.sh
+          ./.github/scripts/remediate.sh
 
-  #     - name: Commit & push fixes
-  #       run: |
-  #         git config user.name "github-actions[bot]"
-  #         git config user.email "github-actions[bot]@users.noreply.github.com"
-  #         git add frontend/Dockerfile package.json requirements.txt || true
-  #         git commit -m "Automated remediation fixes" || echo "No changes to commit"
-  #         git push origin $BRANCH
+      - name: Commit & push fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add frontend/Dockerfile package.json requirements.txt || true
+          git commit -m "Automated remediation fixes" || echo "No changes to commit"
+          git push origin $BRANCH
 
+  # Uncomment and modify these deployment jobs as needed
   # ccli_hydra_e1_deployment:
   #   name: 🚀🟡 Deploy image to E1 Hydra
   #   needs: [set_env, ace-build, trivy-scan]

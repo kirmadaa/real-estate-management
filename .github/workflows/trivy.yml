@@ -78,23 +78,31 @@ jobs:
     needs: docker_build_push
     runs-on: ubuntu-latest
     env:
-      IMAGE_NAME: ${{ needs.set_env.outputs.image_name }}
+      IMAGE_NAME: ${{ needs.set_env.outputs.full_image_name }}
       IMAGE_TAG: ${{ needs.set_env.outputs.image_tag }}
     steps:
       - name: Install Trivy with DB download
         run: |
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
           trivy --version
-          trivy image --download-db-only  # Pre-download DB to avoid timeout
+          trivy image --download-db-only
+
+      - name: Verify image name and tag
+        run: |
+          echo "Scanning image: $IMAGE_NAME:$IMAGE_TAG"
+          if [ -z "$IMAGE_NAME" ] || [ -z "$IMAGE_TAG" ]; then
+            echo "ERROR: Image name or tag is empty!"
+            exit 1
+          fi
 
       - name: Scan Docker Image
         run: |
           trivy image \
-            --scanners vuln \  # Updated from deprecated --security-checks
+            --scanners vuln \
             --format table \
             --exit-code 0 \
-            --timeout 10m \  # Increased timeout
-            $IMAGE_NAME:$IMAGE_TAG
+            --timeout 10m \
+            "$IMAGE_NAME:$IMAGE_TAG"
 
       - name: Generate JSON Report
         run: |
@@ -103,7 +111,7 @@ jobs:
             --format json \
             --output trivy-report.json \
             --timeout 10m \
-            $IMAGE_NAME:$IMAGE_TAG
+            "$FULL_IMAGE_NAME:$IMAGE_TAG"
 
       - name: Upload Scan Report
         uses: actions/upload-artifact@v4

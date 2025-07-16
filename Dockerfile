@@ -1,5 +1,5 @@
 # Dockerfile
-FROM alpine:3.19 # Updated base image to a newer patch/minor version
+FROM alpine:3.19
 LABEL maintainer="devsecops@example.com"
 
 # Example: Install some packages, potentially old versions

@@ -197,7 +197,7 @@ jobs:
         run: |
           if [ -f "${{ env.APP_ROOT_DIRECTORY }}/package.json" ]; then
             sudo apt-get install -y npm
-            npm config set unsafe-perm true # Potentially needed for global npm installs as root
+            # npm config set unsafe-perm true # Potentially needed for global npm installs as root
           fi
 
       # Example for Go:

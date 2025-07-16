@@ -460,7 +460,7 @@ def find_fix_online(vulnerability_id, package_name, installed_version, descripti
         logging.info("Simulated: Found a recommended base image upgrade for a critical OS vulnerability.")
         # In a real system, you'd determine the latest patched version of the base image.
         # Example: if current is 'debian:11-slim', recommend 'debian:12-slim' or specific patched version.
-        return {"type": "base_image_upgrade", "recommended_image": "debian:12.12-slim"} # Example newer version
+        return {"type": "base_image_upgrade", "recommended_image": "debian:12-slim"} # Example newer version
     
     # Heuristic 2: Specific common application dependency
     elif "git" in package_name.lower() and "file creation flaw" in description.lower():

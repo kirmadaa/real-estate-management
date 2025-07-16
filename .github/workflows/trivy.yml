@@ -153,7 +153,7 @@ jobs:
   remediation:
     name: 🔧 Automated Remediation
     needs: [set_env, trivy_scan]
-    if: needs.trivy_scan.outputs.vulnerabilities_found == 'true' # Only run if vulns found
+    # if: needs.trivy_scan.outputs.vulnerabilities_found == 'true' # Only run if vulns found
     runs-on: ubuntu-latest
     env:
       BRANCH: ${{ needs.set_env.outputs.checkout_branch }}

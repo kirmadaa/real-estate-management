@@ -148,7 +148,7 @@ jobs:
   remediation:
     name: 🔧 Automated Remediation
     needs: [set_env, trivy_scan]
-    if: needs.trivy_scan.outputs.vulnerabilities_found == 'true' # This condition will now work correctly
+    # if: needs.trivy_scan.outputs.vulnerabilities_found == 'true' # This condition will now work correctly
     runs-on: ubuntu-latest
     env:
       BRANCH: ${{ needs.set_env.outputs.checkout_branch }}

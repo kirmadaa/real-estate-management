@@ -43,7 +43,7 @@ jobs:
         id: build
         run: |
           img="${{ needs.set_env.outputs.image_name }}:${{ needs.set_env.outputs.image_tag }}"
-          docker build -t "$img" .
+          docker build -t frontend/Dockerfile -t "$img" frontend
           docker tag "$img" "${{ needs.set_env.outputs.image_name }}:latest"
           echo "Built $img and tagged as latest"
 

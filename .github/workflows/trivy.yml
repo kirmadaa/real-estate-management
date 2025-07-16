@@ -111,7 +111,7 @@ jobs:
             --format json \
             --output trivy-report.json \
             --timeout 10m \
-            "$FULL_IMAGE_NAME:$IMAGE_TAG"
+            "$IMAGE_NAME:$IMAGE_TAG"
 
       - name: Upload Scan Report
         uses: actions/upload-artifact@v4

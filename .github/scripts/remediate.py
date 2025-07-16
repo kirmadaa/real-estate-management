@@ -138,7 +138,6 @@ def harden_dockerfile(dockerfile_path):
                         insert_index = i + 1
 
             if insert_index != -1:
-                # Corrected: Each line must end with '\n' for writelines, no literal '\\n'
                 user_add_commands_to_insert = [
                     "RUN groupadd --system appgroup && useradd --system --gid appgroup appuser\n",
                     "USER appuser\n"
@@ -161,7 +160,6 @@ def harden_dockerfile(dockerfile_path):
                     print("Replaced 'USER root' with non-root user commands.")
                     updated_user = True
                 elif not user_set: # Only add if no USER instruction was present initially
-                    # Corrected: Insert individual lines, not a single joined string with extra \n
                     new_lines[insert_index:insert_index] = user_add_commands_to_insert
                     print("Added non-root user to Dockerfile.")
                     updated_user = True
@@ -177,20 +175,20 @@ def harden_dockerfile(dockerfile_path):
             insert_point_found = False
             for i, line in enumerate(new_lines): # Iterate through new_lines as it might have been modified
                 if line.strip().upper().startswith("USER"):
-                    new_lines.insert(i + 1, "WORKDIR /app\n") # Corrected: single '\n'
+                    new_lines.insert(i + 1, "WORKDIR /app\n")
                     print("Added WORKDIR /app to Dockerfile after USER.")
                     updated_workdir = True
                     insert_point_found = True
                     break
                 elif line.strip().upper().startswith("FROM"):
                     if not insert_point_found: # If WORKDIR wasn't added after USER, add after FROM
-                        new_lines.insert(i + 1, "WORKDIR /app\n") # Corrected: single '\n'
+                        new_lines.insert(i + 1, "WORKDIR /app\n")
                         print("Added WORKDIR /app to Dockerfile after FROM.")
                         updated_workdir = True
                         insert_point_found = True
                         break
             if not insert_point_found: # Fallback: add at the very beginning
-                new_lines.insert(0, "WORKDIR /app\n") # Corrected: single '\n'
+                new_lines.insert(0, "WORKDIR /app\n")
                 print("Added WORKDIR /app to Dockerfile at start.")
                 updated_workdir = True
         else:
@@ -209,6 +207,11 @@ def harden_dockerfile(dockerfile_path):
         print(f"Error hardening Dockerfile: {e}")
         return False
 
+def main():
+    # Retrieve paths from environment variables, typically set by GitHub Actions
+    report_path = os.environ.get('TRIVY_REPORT_PATH', 'trivy-report.json')
+    dockerfile_path = os.environ.get('DOCKERFILE_PATH', 'Dockerfile')
+    app_root_dir = os.environ.get('APP_ROOT_DIR', os.getcwd()) # Default to current working directory
 
     if not os.path.exists(report_path):
         print(f"Trivy report not found at {report_path}. Exiting.")
@@ -224,7 +227,7 @@ def harden_dockerfile(dockerfile_path):
         with open(report_path, 'r') as f:
             report = json.load(f)
     except json.JSONDecodeError as e:
-        print(f"Error decoding JSON report: {e}. Report content:\\n{open(report_path).read()}")
+        print(f"Error decoding JSON report: {e}. Report content:\n{open(report_path).read()}")
         sys.exit(1)
 
     vulnerabilities_found = 0
@@ -238,7 +241,7 @@ def harden_dockerfile(dockerfile_path):
         if not vulnerabilities:
             continue
 
-        print(f"\\nProcessing vulnerabilities for target: {target}")
+        print(f"\nProcessing vulnerabilities for target: {target}")
 
         for vuln in vulnerabilities:
             vulnerabilities_found += 1
@@ -285,6 +288,7 @@ def harden_dockerfile(dockerfile_path):
                                 match = re.search(r"alpine:(\\d+\\.\\d+)", current_base_image, re.IGNORECASE)
                                 if match:
                                     major_minor = match.group(1)
+                                    # Increment minor version for alpine, this is a simplified heuristic
                                     parts = [int(p) for p in major_minor.split('.')]
                                     new_minor = parts[1] + 1
                                     updated_base_image = current_base_image.replace(major_minor, f"{parts[0]}.{new_minor}")
@@ -318,16 +322,18 @@ def harden_dockerfile(dockerfile_path):
             repo_changed = True
 
     if vulnerabilities_found == 0:
-        print("\\nNo vulnerabilities found in the report.")
+        print("\nNo vulnerabilities found in the report.")
         sys.exit(0)
     elif vulnerabilities_fixed == vulnerabilities_found:
-        print(f"\\nAll {vulnerabilities_fixed} vulnerabilities found have been fixed!")
+        print(f"\nAll {vulnerabilities_fixed} vulnerabilities found have been fixed!")
         sys.exit(0)
     elif vulnerabilities_fixed > 0:
-        print(f"\\nSuccessfully fixed {vulnerabilities_fixed} out of {vulnerabilities_found} vulnerabilities. Review remaining issues.")
+        print(f"\nSuccessfully fixed {vulnerabilities_fixed} out of {vulnerabilities_found} vulnerabilities. Review remaining issues.")
+        # In a real scenario, you might exit with 0 here if partial fix is acceptable,
+        # or 1 if all must be fixed. For now, letting it exit 0 for partial success.
         sys.exit(0)
     else:
-        print(f"\\nCould not automatically fix any of the {vulnerabilities_found} vulnerabilities.")
+        print(f"\nCould not automatically fix any of the {vulnerabilities_found} vulnerabilities.")
         sys.exit(1)
 
 if __name__ == "__main__":

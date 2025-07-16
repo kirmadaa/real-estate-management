@@ -1,4 +1,4 @@
-FROM node:18
+FROM debian:12.12-slim
 WORKDIR /app
 COPY package*.json ./
 RUN npm install -g @angular/cli

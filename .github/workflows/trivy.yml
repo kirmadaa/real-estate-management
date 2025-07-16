@@ -136,6 +136,7 @@ jobs:
             --output trivy-report.json \
             "${IMAGE_NAME}:${IMAGE_TAG}"
 
+          # Check if the report contains any vulnerabilities
           if jq -e '.[] | select(.Vulnerabilities != null and .Vulnerabilities | length > 0)' trivy-report.json > /dev/null; then
             echo "Vulnerabilities found!"
             echo "found=true" >> $GITHUB_OUTPUT
@@ -144,7 +145,7 @@ jobs:
             echo "found=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Upload report
+      - name: Upload initial report
         uses: actions/upload-artifact@v4
         with:
           name: trivy-security-report
@@ -153,13 +154,16 @@ jobs:
   remediation:
     name: 🔧 Automated Remediation
     needs: [set_env, trivy_scan]
-    # if: needs.trivy_scan.outputs.vulnerabilities_found == 'true' # Only run if vulns found
+    # Only run if vulnerabilities were found by the initial scan or if you want to try hardening anyway
+    if: needs.trivy_scan.outputs.vulnerabilities_found == 'true' || always()
     runs-on: ubuntu-latest
+    outputs:
+      remediation_validation_status: ${{ steps.validation_scan.outputs.remediation_validation }}
+      remediated_image_tag: ${{ steps.read_remediated_image_tag.outputs.tag }} # Output the remediated tag
     env:
       BRANCH: ${{ needs.set_env.outputs.checkout_branch }}
       RUN_ID: ${{ needs.set_env.outputs.run_id }}
-      IMAGE_NAME: ${{ needs.set_env.outputs.image_name }}
-      IMAGE_TAG: ${{ needs.set_env.outputs.image_tag }}
+      IMAGE_NAME: ${{ needs.set_env.outputs.image_name }} # Base name for new images
       # --- Pass these dynamic paths as ENVIRONMENT VARIABLES for the script ---
       TRIVY_REPORT_PATH: trivy-report.json # This file is downloaded to current directory
       DOCKERFILE_PATH: ${{ needs.set_env.outputs.app_dockerfile_path }}
@@ -171,7 +175,7 @@ jobs:
         with:
           ref: ${{ env.BRANCH }}
           # The auto-commit action needs push permissions
-          token: ${{ secrets.GITHUB_TOKEN }} 
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -188,7 +192,6 @@ jobs:
 
       - name: Install npm (if needed for Node.js projects)
         run: |
-          # Check if package.json exists in the specified APP_ROOT_DIR
           if [ -f "${{ env.APP_ROOT_DIR }}/package.json" ]; then
             echo "package.json detected. Installing npm."
             sudo apt-get install -y npm
@@ -220,7 +223,6 @@ jobs:
             echo "Gemfile not detected in ${{ env.APP_ROOT_DIR }}. Skipping Ruby installation."
           fi
 
-
       - name: Download Trivy report artifact
         uses: actions/download-artifact@v4
         with:
@@ -228,28 +230,19 @@ jobs:
           path: . # Downloads trivy-report.json to the current directory
 
       - name: Make remediation script executable
-        # Assuming the script is at .github/scripts/remediat.py
         run: chmod +x .github/scripts/reditest.py
 
       - name: Run remediation script
         id: run_remediation
-        # Let the script control its exit code. If it exits with 1, this step will fail.
-        # This is desired to fail the workflow if remediation was completely unsuccessful.
-        run: |
-          # The Python script will read its inputs from environment variables
-          # as configured in the 'env:' block of this job.
-          python .github/scripts/reditest.py
+        # The Python script will read its inputs from environment variables
+        run: python .github/scripts/reditest.py
 
       - name: Check for changes after remediation script
         id: git_status_check
         run: |
-          # Temporarily configure git to detect changes
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
           git add .
-          # Check for any staged changes. If there are, git diff --cached --quiet will exit with 1.
-          # If no changes, it exits with 0.
           if ! git diff --cached --quiet; then
             echo "changes_made=true" >> $GITHUB_OUTPUT
             echo "Repository changes detected after remediation script execution."
@@ -257,7 +250,6 @@ jobs:
             echo "changes_made=false" >> $GITHUB_OUTPUT
             echo "No changes detected after remediation script execution."
           fi
-          # Do not clean up staged changes; the auto-commit action will handle it.
 
       - name: Commit & push fixes (if changes detected by script)
         if: steps.git_status_check.outputs.changes_made == 'true'
@@ -266,123 +258,48 @@ jobs:
           commit_message: "feat(security): Automated vulnerability remediation by Trivy report"
           branch: ${{ env.BRANCH }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Required for pushing
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Re-scan to Validate Fixes (if changes were committed)
-        id: validation_scan # Give this step an ID to reference its outputs
+      - name: Read remediated image tag
+        id: read_remediated_image_tag
         if: steps.git_status_check.outputs.changes_made == 'true'
         run: |
-          echo "Running final Trivy re-scan on the remediated image for validation."
-          # The remediated image name is generated by the Python script using a timestamp,
-          # so we need to derive it or assume a pattern.
-          # For robust validation, the python script should push the remediated image
-          # to a well-known tag/name, or output its name to a file,
-          # or the workflow should pass it back.
-          # For simplicity, we'll try to re-use the python script's logic to form the tag.
-          # A better approach would be to have the Python script output the new image name
-          # to a file, which the workflow then reads.
-          
-          # Deducing the remediated image name from Python script's logic
-          # This relies on the convention: IMAGE_NAME:remediated-TIMESTAMP
-          # We'll just build it directly here using the current timestamp for illustration.
-          # In a true scenario, the remediation script would push the image and output its tag.
-          # For now, let's assume the script rebuilt and tagged the image as `IMAGE_NAME:remediated-current_timestamp`
-          # This assumes `build_docker_image` within the python script also pushes.
-          # Or, ideally, the python script's build_docker_image just builds locally,
-          # and the workflow explicitly pushes it here if validation passes.
-          # For simplicity of this example, we assume `remediat.py` handled the build.
-          # To truly validate, we need to re-pull the *newly committed* code, rebuild, and re-scan.
-          # The `remediat.py` actually performs the rebuild and re-scan internally,
-          # and leaves a `trivy-remediated-scan-report.json`.
-          # So we just need to read its output.
-
-          # This step now focuses on parsing the report generated by the remediation script
-          if [ -f "${{ env.TRIVY_REPORT_PATH }}" ]; then
-            echo "Analyzing the remediation script's re-scan report: ${{ env.TRIVY_REPORT_PATH }}"
-            # We need the report generated by the python script (e.g., trivy-remediated-scan-report.json)
-            # which is written to the same directory as the initial report.
-            REMEDIATED_REPORT_PATH=$(dirname "${{ env.TRIVY_REPORT_PATH }}")/trivy-remediated-scan-report.json
-
-            if [ -f "$REMEDIATED_REPORT_PATH" ]; then
-                if jq -e '.[] | select(.Vulnerabilities != null and .Vulnerabilities | length > 0)' "$REMEDIATED_REPORT_PATH" > /dev/null; then
-                  echo "Vulnerabilities still present after remediation. Manual review needed."
-                  echo "remediation_validation=failure" >> $GITHUB_OUTPUT
-                else
-                  echo "Image is clean after remediation. Great success!"
-                  echo "remediation_validation=success" >> $GITHUB_OUTPUT
-                fi
-            else
-                echo "Remediated scan report '$REMEDIATED_REPORT_PATH' not found. Cannot validate fixes."
-                echo "remediation_validation=unknown" >> $GITHUB_OUTPUT
-            fi
+          # The script writes the remediated tag to this file
+          if [ -f "remediated_image_tag.txt" ]; then
+            REMEDIATED_TAG=$(cat remediated_image_tag.txt)
+            echo "Found remediated image tag: $REMEDIATED_TAG"
+            echo "tag=$REMEDIATED_TAG" >> $GITHUB_OUTPUT
           else
-            echo "Initial Trivy report '${{ env.TRIVY_REPORT_PATH }}' not found. Cannot proceed with validation."
-            echo "remediation_validation=unknown" >> $GITHUB_OUTPUT
+            echo "remediated_image_tag.txt not found. Cannot determine remediated image tag."
+            echo "tag=unknown" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Re-scan to Validate Fixes
+        id: validation_scan
+        if: steps.git_status_check.outputs.changes_made == 'true' && steps.read_remediated_image_tag.outputs.tag != 'unknown'
+        run: |
+          echo "Running final Trivy re-scan on the remediated image for validation."
+          REMEDIATED_REPORT_PATH="trivy-remediated-scan-report.json" # As generated by the python script
+
+          if [ -f "$REMEDIATED_REPORT_PATH" ]; then
+              echo "Analyzing the remediation script's re-scan report: $REMEDIATED_REPORT_PATH"
+              if jq -e '.[] | select(.Vulnerabilities != null and .Vulnerabilities | length > 0 and (.Vulnerabilities[] | select(.Severity == "CRITICAL" or .Severity == "HIGH")))' "$REMEDIATED_REPORT_PATH" > /dev/null; then
+                echo "Vulnerabilities still present (Critical/High) after remediation. Manual review needed."
+                echo "remediation_validation=failure" >> $GITHUB_OUTPUT
+                exit 1 # Fail the step if critical/high vulns remain
+              else
+                echo "Image is clean of Critical/High vulnerabilities after remediation. Great success!"
+                echo "remediation_validation=success" >> $GITHUB_OUTPUT
+              fi
+          else
+              echo "Remediated scan report '$REMEDIATED_REPORT_PATH' not found. Cannot validate fixes."
+              echo "remediation_validation=unknown" >> $GITHUB_OUTPUT
+              exit 1 # Fail if report not found for validation
           fi
 
       - name: Upload remediated report artifact (if generated)
-        if: steps.git_status_check.outputs.changes_made == 'true' && success() # Only upload if changes were made and previous steps succeeded
+        if: steps.git_status_check.outputs.changes_made == 'true' && always() # Always attempt to upload if remediation ran
         uses: actions/upload-artifact@v4
         with:
           name: trivy-remediated-security-report
-          path: trivy-remediated-scan-report.json # Path written by remediat.py
-
-      # - name: Notify Slack (Remediation Status)
-      #   uses: rtCamp/action-slack-notify@v2
-      #   env:
-      #     SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
-      #     SLACK_CHANNEL: '#devsecops-alerts' # Customize your Slack channel
-      #     SLACK_USERNAME: 'Vulnerability Remediation Bot'
-      #     SLACK_ICON_EMOJI: ':robot_face:'
-      #     SLACK_MESSAGE: |
-      #       *Automated Vulnerability Remediation Attempt Result*
-      #       Repository: `${{ github.repository }}`
-      #       Branch: `${{ env.BRANCH }}`
-      #       Workflow Run: <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_id }}>
-            
-      #       ${{ steps.git_status_check.outputs.changes_made == 'true' && '✅ Fixes Applied & Committed!' || 'ℹ️ No fixes applied or no changes needed.' }}
-      #       ${{ steps.git_status_check.outputs.changes_made == 'true' && format('Validation Scan: {0}', steps.validation_scan.outputs.remediation_validation) || '' }}
-            
-      #       ${{ success() && '🟢 Workflow completed successfully.' || '🔴 Workflow failed or had issues.' }}
-      #       ${{ failure() && '🚨 Manual intervention required.' || '' }}
-        # if: always() # Always run notification
-
-  # Uncomment and modify these deployment jobs as needed
-  # Deployment should only happen if initial scan was clean OR remediation successfully cleaned the image.
-  # This requires the remediation job to explicitly output success/failure for validation.
-  # The `remediation` job now sets `steps.validation_scan.outputs.remediation_validation` to 'success' or 'failure'.
-  # ccli_hydra_e1_deployment:
-  #   name: 🚀🟡 Deploy image to E1 Hydra
-  #   needs: [set_env, docker_build_push, trivy_scan, remediation]
-  #   if: |
-  #     (needs.trivy_scan.outputs.vulnerabilities_found == 'false') || 
-  #     (needs.remediation.outputs.remediation_validation == 'success')
-    # If remediation occurred and was successful, use the remediated image tag.
-    # Otherwise, use the original image tag.
-    # This requires the remediation step to output the new image tag.
-    # For now, let's assume the build/push job pushed the original image,
-    # and the remediation script pushes the remediated image with a distinct tag.
-    # This part needs more careful design to pass the *actual* deployable image tag.
-    # For simplicity, if remediation was successful, we'd deploy the *latest* remediated image.
-    # This example assumes the deployment workflow pulls `image_name:latest` or similar.
-    # Ideally, the `remediation` job would push `image_name:remediated-latest` and `docker_build_push` pushes `image_name:original-latest`.
-    # And this job selects the appropriate tag.
-
-    # This part depends heavily on your deployment system.
-    # If your deployment system supports specifying the image by sha256 or a unique tag,
-    # the remediation job needs to output the new image tag.
-    # For now, this is a placeholder.
-    # uses: amex-eng/ace-platform-reusable-workflow/.github/workflows/deploy_to_hydra_ccli_validate.yml@main
-    # with:
-    #   image_name_ccli: artifactory.aexp.com/dockerproxy/${{ needs.set_env.outputs.image_name }}
-    #   sha256: ${{ needs.ace-build.outputs.pushed_image }} # This needs to be the SHA of the *remediated* image if remediation happened.
-    #   regions: US
-    #   env: "E1"
-    #   project: ${{ vars.PROJECT }}
-    #   service: ${{ vars.SERVICE }}
-    #   image_time_stamp: ${{ needs.set_env.outputs.image_tag }} # This needs to be the *remediated* tag
-    # secrets:
-    #   SE_USERNAME: ${{ secrets.SE_USERNAME }}
-    #   SE_PASSWORD: ${{ secrets.SE_PASSWORD }}
-    #   ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
-    #   ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+          path: trivy-remediated-scan-report.json # Path written by reditest.py

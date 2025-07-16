@@ -229,7 +229,7 @@ jobs:
 
       - name: Make remediation script executable
         # Assuming the script is at .github/scripts/remediat.py
-        run: chmod +x .github/scripts/remediat.py
+        run: chmod +x .github/scripts/reditest.py
 
       - name: Run remediation script
         id: run_remediation
@@ -238,7 +238,7 @@ jobs:
         run: |
           # The Python script will read its inputs from environment variables
           # as configured in the 'env:' block of this job.
-          python .github/scripts/remediat.py
+          python .github/scripts/remitest.py
 
       - name: Check for changes after remediation script
         id: git_status_check

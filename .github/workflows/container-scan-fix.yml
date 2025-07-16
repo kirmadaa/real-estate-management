@@ -1,0 +1,119 @@
+name: Container Scan & Auto-Fix
+
+on:
+  push:
+    branches:
+      - main # Trigger on pushes to main
+  pull_request:
+    branches:
+      - main # Trigger on PRs targeting main
+
+jobs:
+  trivy-auto-fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to push changes and create PRs
+      pull-requests: write # Required to create PRs
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # Needed for git operations later
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      - name: Install Python dependencies
+        run: pip install python-dotenv # Example, for any future env vars
+
+      - name: Build Docker Image (Original)
+        id: build_original
+        run: |
+          docker build -t myapp:latest .
+          echo "IMAGE_ID=myapp:latest" >> $GITHUB_OUTPUT
+
+      - name: Run Trivy Scan (Original)
+        id: trivy_scan_original
+        run: |
+          trivy image --format json --output trivy-report-original.json ${{ steps.build_original.outputs.IMAGE_ID }}
+          echo "TRIVY_REPORT_PATH=trivy-report-original.json" >> $GITHUB_OUTPUT
+        continue-on-error: true # Allow subsequent steps to run even if vulnerabilities are found
+
+      - name: Parse Trivy Report & Identify Fixes
+        id: parse_report
+        run: |
+          python3 scripts/parse_trivy_report.py ${{ steps.trivy_scan_original.outputs.TRIVY_REPORT_PATH }}
+          # The parse_trivy_report.py script will create 'vulnerabilities.json' if fixes are needed
+        continue-on-error: true # Continue if no vulnerabilities found
+
+      - name: Apply Fixes to Dockerfile
+        id: apply_fixes
+        run: |
+          python3 scripts/apply_fixes.py Dockerfile vulnerabilities.json
+          # The apply_fixes.py script will update 'Dockerfile' if changes are applied
+          if [ -f "Dockerfile.fixed" ]; then
+            mv Dockerfile.fixed Dockerfile
+            echo "DOCKERFILE_MODIFIED=true" >> $GITHUB_OUTPUT
+          else
+            echo "DOCKERFILE_MODIFIED=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check for Dockerfile Changes
+        id: git_status
+        run: |
+          if git diff --exit-code --quiet Dockerfile; then
+            echo "::set-output name=has_changes::false"
+          else
+            echo "::set-output name=has_changes::true"
+          fi
+
+      - name: Commit & Create Pull Request
+        if: steps.git_status.outputs.has_changes == 'true'
+        run: |
+          BRANCH_NAME="fix/vulnerabilities-$(date +%Y%m%d%H%M%S)"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b $BRANCH_NAME
+          git add Dockerfile # Add the potentially modified Dockerfile
+          git commit -m " chore(deps): Automate vulnerability fixes"
+          git push origin $BRANCH_NAME
+
+          PR_BODY="Automated vulnerability remediation detected and applied to Dockerfile.
+          
+          **Original Trivy Report (summary of Critical/High):**
+          $(cat trivy-report-original.json | python3 -c 'import json, sys; data=json.load(sys.stdin); print("\n".join([f"- {v["VulnerabilityID"]} ({v["Severity"]}) in {v["PkgName"]}:{v["InstalledVersion"]} (Fix: {v.get("FixedVersion", "N/A")})" for r in data.get("Results", []) for v in r.get("Vulnerabilities", []) if v["Severity"] in ["CRITICAL", "HIGH"] and v.get("FixedVersion")]))')
+          
+          This PR attempts to fix these by updating base images or packages.
+          
+          **Validation**: A subsequent scan on this PR branch will confirm the fixes."
+
+          gh pr create --base main --head $BRANCH_NAME --title "Automated: Fix container vulnerabilities" --body "$PR_BODY"
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker Image (Fixed - for immediate validation in same run)
+        if: steps.git_status.outputs.has_changes == 'true' # Only if Dockerfile was modified
+        id: build_fixed
+        run: |
+          docker build -t myapp-fixed:latest .
+          echo "IMAGE_ID_FIXED=myapp-fixed:latest" >> $GITHUB_OUTPUT
+
+      - name: Run Trivy Scan (Fixed - for immediate validation)
+        if: steps.git_status.outputs.has_changes == 'true' # Only if Dockerfile was modified
+        id: trivy_scan_fixed
+        run: |
+          trivy image --format json --output trivy-report-fixed.json ${{ steps.build_fixed.outputs.IMAGE_ID_FIXED }}
+          echo "TRIVY_REPORT_FIXED_PATH=trivy-report-fixed.json" >> $GITHUB_OUTPUT

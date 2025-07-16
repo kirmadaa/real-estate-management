@@ -96,6 +96,8 @@ def update_dockerfile_base_image(dockerfile_path, current_image, fixed_image):
         logging.error(f"Error updating Dockerfile base image in '{dockerfile_path}': {e}")
         return False
 
+# Placeholder functions for other package managers
+# These would be enhanced to parse package files and update versions programmatically
 def fix_npm_dependency(package_name, fixed_version, app_root_dir):
     """
     Fixes a specific NPM package dependency by running npm commands
@@ -114,14 +116,10 @@ def fix_npm_dependency(package_name, fixed_version, app_root_dir):
     success_audit, audit_output = run_command(["npm", "audit", "fix"], cwd=app_root_dir, check_result=False, capture_output=True, description="npm audit fix")
     if success_audit:
         logging.info(f"Successfully ran 'npm audit fix'. Verifying if fix was applied.")
-        # Re-check package-lock.json or rely on subsequent Trivy scan
         return True
     else:
         logging.warning(f"npm audit fix failed or didn't fully resolve for {package_name}. Trying npm install with fixed version: {fixed_version}.")
         try:
-            # Check if package is a peer dependency of a direct dependency
-            # This is more complex and typically requires parsing package.json and package-lock.json.
-            # For simplicity, if audit fix fails, we attempt a direct update.
             install_cmd = ["npm", "install", f"{package_name}@{fixed_version}"]
             logging.info(f"Running '{' '.join(install_cmd)}' in {app_root_dir}")
             success_install, _ = run_command(install_cmd, cwd=app_root_dir, description="npm install")
@@ -136,186 +134,84 @@ def fix_npm_dependency(package_name, fixed_version, app_root_dir):
             return False
 
 def fix_pip_dependency(package_name, fixed_version, app_root_dir):
-    """
-    Implements fix for Python (pip) dependencies by attempting to update
-    requirements.txt (if found) or directly upgrading the package.
-    """
     logging.info(f"Attempting to fix Python package '{package_name}' to version '{fixed_version}' in {app_root_dir}")
-    
     requirements_path = os.path.join(app_root_dir, 'requirements.txt')
-    pipfile_lock_path = os.path.join(app_root_dir, 'Pipfile.lock')
-
     updated_requirements_file = False
-
     if os.path.exists(requirements_path):
-        logging.info(f"Found requirements.txt at {requirements_path}. Attempting to update.")
         try:
-            with open(requirements_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            
+            with open(requirements_path, 'r', encoding='utf-8') as f: lines = f.readlines()
             new_lines = []
             updated = False
             for line in lines:
-                # Regex to find package_name, allowing for various version specifiers (==, >=, <, ~)
-                # and comments/whitespace. Make sure it's not a different package with similar name.
-                # Example: `package-name==1.2.3` or `package-name>=1.0`
                 pkg_pattern = r"^\s*" + re.escape(package_name) + r"([<>=!~=]=?[\d\.]+.*)?$"
                 if re.match(pkg_pattern, line, re.IGNORECASE):
-                    # Replace or append the fixed version
-                    if re.search(r"[<>=!~=]=?[\d\.]+", line): # If version already exists
+                    if re.search(r"[<>=!~=]=?[\d\.]+", line):
                         new_line = re.sub(r"([<>=!~=]=?[\d\.]+)", f"=={fixed_version}", line, count=1)
-                    else: # If only package name
+                    else:
                         new_line = line.strip() + f"=={fixed_version}\n"
-                    
                     if new_line != line:
                         new_lines.append(new_line)
-                        logging.info(f"Updated requirements.txt line: {new_line.strip()}")
                         updated = True
-                    else: # No change needed or already correct
-                        new_lines.append(line)
-                else:
-                    new_lines.append(line)
-            
+                    else: new_lines.append(line)
+                else: new_lines.append(line)
             if updated:
-                if atomic_write_file(requirements_path, "".join(new_lines)):
-                    updated_requirements_file = True
-                else:
-                    return False # Failed to write
-            else:
-                logging.info(f"Could not find or update '{package_name}' in requirements.txt. Attempting direct upgrade.")
+                if atomic_write_file(requirements_path, "".join(new_lines)): updated_requirements_file = True
+                else: return False
         except Exception as e:
             logging.error(f"Error updating requirements.txt for {package_name}: {e}")
-            # Do not return, try direct pip install as fallback
-
-    # If requirements.txt was updated, install from it. Else, try direct upgrade.
     if updated_requirements_file:
-        success, _ = run_command([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], 
-                                 cwd=app_root_dir, description="pip install -r requirements.txt")
-        if success:
-            logging.info(f"Successfully ran 'pip install -r requirements.txt' after updating {package_name}.")
-            return True
-        else:
-            logging.error(f"Failed to install from updated requirements.txt after updating {package_name}. Trying direct upgrade.")
-            # Fallback to direct upgrade if requirements.txt install failed
-            pass # Continue to the direct upgrade path below
-    
-    # Fallback to direct upgrade if requirements.txt not found or update/install from it failed
-    success, _ = run_command([sys.executable, "-m", "pip", "install", "--upgrade", f"{package_name}=={fixed_version}"], 
-                             cwd=app_root_dir, check_result=False, description="pip install upgrade")
-    if success:
-        logging.info(f"Successfully ran 'pip install --upgrade {package_name}=={fixed_version}'.")
-        return True
-    else:
-        logging.warning(f"Direct pip upgrade also failed for {package_name}.")
-        return False
+        success, _ = run_command([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], cwd=app_root_dir, description="pip install -r requirements.txt")
+        if success: return True
+    success, _ = run_command([sys.executable, "-m", "pip", "install", "--upgrade", f"{package_name}=={fixed_version}"], cwd=app_root_dir, check_result=False, description="pip install upgrade")
+    return success
 
 def fix_gem_dependency(package_name, fixed_version, app_root_dir):
-    """
-    Implements fix for Ruby (gem) dependencies by updating Gemfile.
-    Requires 'bundle update {package_name}' or 'bundle install'.
-    """
     logging.info(f"Attempting to fix Ruby gem '{package_name}' to version '{fixed_version}' in {app_root_dir}")
     gemfile_path = os.path.join(app_root_dir, 'Gemfile')
     gemfile_lock_path = os.path.join(app_root_dir, 'Gemfile.lock')
-
     if not os.path.exists(gemfile_path) and not os.path.exists(gemfile_lock_path):
         logging.warning(f"Neither Gemfile nor Gemfile.lock found at {app_root_dir}. Skipping Ruby gem fix for {package_name}.")
         return False
-
     updated_gemfile = False
-
     if os.path.exists(gemfile_path):
-        logging.info(f"Found Gemfile at {gemfile_path}. Attempting to update.")
         try:
-            with open(gemfile_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            
+            with open(gemfile_path, 'r', encoding='utf-8') as f: lines = f.readlines()
             new_lines = []
             updated = False
             for line in lines:
-                # Regex to find 'gem "package_name"' with or without version constraints
                 gem_pattern = r"^\s*gem\s+['\"]" + re.escape(package_name) + r"['\"](\s*,.*)?$"
                 match = re.match(gem_pattern, line, re.IGNORECASE)
                 if match:
-                    # Append or replace the version constraint
-                    # Use optimistic operator ~> for better compatibility, or exact for strict fix
-                    # For a "fixed version", exact '== {fixed_version}' is safer if known specific fix
-                    # but '~> fixed_version' (e.g., ~> 1.2.3 means >= 1.2.3 and < 1.3.0) is common.
-                    # Sticking to '~>' for broader compatibility within a minor/patch release.
                     new_line = f"  gem '{package_name}', '~> {fixed_version}'\n"
-                    
-                    if new_line.strip() != line.strip(): # Compare stripped lines to ignore whitespace differences
+                    if new_line.strip() != line.strip():
                         new_lines.append(new_line)
-                        logging.info(f"Updated Gemfile line: {new_line.strip()}")
                         updated = True
-                    else:
-                        new_lines.append(line)
-                else:
-                    new_lines.append(line)
-            
+                    else: new_lines.append(line)
+                else: new_lines.append(line)
             if updated:
-                if atomic_write_file(gemfile_path, "".join(new_lines)):
-                    updated_gemfile = True
-                else:
-                    return False # Failed to write
-            else:
-                logging.info(f"Could not find or update '{package_name}' in Gemfile. Attempting direct bundle update.")
+                if atomic_write_file(gemfile_path, "".join(new_lines)): updated_gemfile = True
+                else: return False
         except Exception as e:
             logging.error(f"Error updating Gemfile for {package_name}: {e}")
-            # Do not return, try bundle update as fallback
-
-    # If Gemfile was updated, run bundle install. Else, try bundle update specific gem.
     if updated_gemfile:
         success_bundle, _ = run_command(["bundle", "install"], cwd=app_root_dir, description="bundle install")
-        if success_bundle:
-            logging.info(f"Successfully ran 'bundle install' after updating {package_name}.")
-            return True
-        else:
-            logging.error(f"Failed to run 'bundle install' after updating Gemfile for {package_name}. Trying 'bundle update {package_name}'.")
-            # Fallback to direct bundle update if bundle install failed
-            pass # Continue to the direct bundle update path below
-
-    # Fallback: try bundle update specific gem or general bundle install
+        if success_bundle: return True
     success, _ = run_command(["bundle", "update", package_name], cwd=app_root_dir, check_result=False, description="bundle update")
-    if success:
-        logging.info(f"Successfully ran 'bundle update {package_name}'.")
-        return True
-    else:
-        logging.warning(f"bundle update failed for {package_name}. Trying 'bundle install'.")
-        success_install, _ = run_command(["bundle", "install"], cwd=app_root_dir, check_result=False, description="bundle install")
-        if success_install:
-            logging.info(f"Successfully ran 'bundle install'.")
-            return True
-        else:
-            logging.error(f"Failed to fix Ruby gem '{package_name}'. Manual intervention may be required.")
-            return False
+    if success: return True
+    success_install, _ = run_command(["bundle", "install"], cwd=app_root_dir, check_result=False, description="bundle install")
+    return success_install
 
 def fix_go_dependency(package_name, fixed_version, app_root_dir):
-    """
-    Implements fix for Go (go mod) dependencies.
-    Requires 'go get -u {package_name}' then 'go mod tidy'.
-    """
     logging.info(f"Attempting to fix Go module '{package_name}' to version '{fixed_version}' in {app_root_dir}")
     go_mod_path = os.path.join(app_root_dir, 'go.mod')
     if not os.path.exists(go_mod_path):
         logging.warning(f"go.mod not found at {go_mod_path}. Skipping Go module fix for {package_name}.")
         return False
-
-    # Attempt to upgrade the specific module
-    # Use 'go get package_name@version' to set a specific version
     success_get, _ = run_command(["go", "get", f"{package_name}@{fixed_version}"], cwd=app_root_dir, check_result=False, description="go get")
     if success_get:
-        logging.info(f"Successfully ran 'go get {package_name}@{fixed_version}'. Running 'go mod tidy'.")
         success_tidy, _ = run_command(["go", "mod", "tidy"], cwd=app_root_dir, description="go mod tidy")
-        if success_tidy:
-            logging.info(f"Successfully ran 'go mod tidy'.")
-            return True
-        else:
-            logging.error(f"Failed to run 'go mod tidy' after updating {package_name}.")
-            return False
-    else:
-        logging.error(f"Failed to run 'go get {package_name}@{fixed_version}'. Manual intervention may be required.")
-        return False
+        return success_tidy
+    return False
 
 def harden_dockerfile(dockerfile_path):
     """
@@ -356,7 +252,6 @@ def harden_dockerfile(dockerfile_path):
         updated_any_rule = False
 
         # Rule 1: Add USER if not set to non-root or if 'USER root' is explicitly used.
-        # Find 'USER root' anywhere in the file (could be multiple stages)
         user_root_lines = [i for i, line in enumerate(new_lines) if line.strip().upper() == "USER ROOT"]
         
         if user_root_lines:
@@ -364,29 +259,27 @@ def harden_dockerfile(dockerfile_path):
             temp_new_lines = []
             for i, line in enumerate(new_lines):
                 if i in user_root_lines:
-                    # Heuristic: Check if base image provides a common user like 'node'
                     user_add_commands_to_insert = [
                         "RUN groupadd --system appgroup && useradd --system --gid appgroup appuser\n",
                         "USER appuser\n"
                     ]
                     
                     from_line_for_stage = ""
-                    # Find the most recent FROM for this stage
                     for j in range(i, -1, -1):
                         if new_lines[j].strip().upper().startswith("FROM"):
                             from_line_for_stage = new_lines[j].lower()
                             break
 
                     if "node:" in from_line_for_stage:
-                        user_add_commands_to_insert = ["USER node\n"] # Assume 'node' user exists
+                        user_add_commands_to_insert = ["USER node\n"]
                     elif "alpine" in from_line_for_stage:
                         user_add_commands_to_insert = [
-                            "RUN addgroup -S appgroup && adduser -S appuser -G appgroup\n", # Alpine
+                            "RUN addgroup -S appgroup && adduser -S appuser -G appgroup\n",
                             "USER appuser\n"
                         ]
                     elif "debian" in from_line_for_stage or "ubuntu" in from_line_for_stage:
                          user_add_commands_to_insert = [
-                            "RUN groupadd --system appgroup && useradd --system --gid appgroup appuser\n", # Debian/Ubuntu
+                            "RUN groupadd --system appgroup && useradd --system --gid appgroup appuser\n",
                             "USER appuser\n"
                         ]
 
@@ -396,7 +289,7 @@ def harden_dockerfile(dockerfile_path):
                 else:
                     temp_new_lines.append(line)
             new_lines = temp_new_lines
-        elif not user_set_explicitly and first_from_index != -1: # No USER instruction at all, add one after the first FROM or last RUN
+        elif not user_set_explicitly and first_from_index != -1:
             insert_index = last_run_index if last_run_index > first_from_index else first_from_index + 1
             
             user_add_commands_to_insert = [
@@ -417,7 +310,6 @@ def harden_dockerfile(dockerfile_path):
                     "USER appuser\n"
                 ]
 
-            # Insert at the calculated index
             new_lines[insert_index:insert_index] = user_add_commands_to_insert
             logging.info("Added non-root user to Dockerfile.")
             updated_any_rule = True
@@ -427,7 +319,6 @@ def harden_dockerfile(dockerfile_path):
         # Rule 2: Add WORKDIR if not set (best practice)
         if not workdir_set:
             insert_point_found = False
-            # Try to insert WORKDIR after USER or after FROM if no user was added
             for i, line in enumerate(new_lines):
                 if line.strip().upper().startswith("USER") and i + 1 < len(new_lines):
                     new_lines.insert(i + 1, "WORKDIR /app\n")
@@ -436,11 +327,9 @@ def harden_dockerfile(dockerfile_path):
                     insert_point_found = True
                     break
                 elif line.strip().upper().startswith("FROM") and not insert_point_found and i + 1 < len(new_lines):
-                    # Check if WORKDIR is present after this FROM but before next FROM/end of file
-                    # To avoid duplicate WORKDIRs if one exists later in the stage
                     stage_has_workdir = False
                     for j in range(i + 1, len(new_lines)):
-                        if new_lines[j].strip().upper().startswith("FROM"): # New stage starts
+                        if new_lines[j].strip().upper().startswith("FROM"):
                             break
                         if new_lines[j].strip().upper().startswith("WORKDIR"):
                             stage_has_workdir = True
@@ -452,8 +341,7 @@ def harden_dockerfile(dockerfile_path):
                         insert_point_found = True
                         break
 
-            if not insert_point_found: # Fallback: add at the very beginning after any FROM
-                # Find the last FROM instruction to insert WORKDIR after it
+            if not insert_point_found:
                 last_from_idx = -1
                 for i, line in enumerate(new_lines):
                     if line.strip().upper().startswith("FROM"):
@@ -463,7 +351,7 @@ def harden_dockerfile(dockerfile_path):
                     new_lines.insert(last_from_idx + 1, "WORKDIR /app\n")
                     logging.info("Added WORKDIR /app to Dockerfile after last FROM.")
                     updated_any_rule = True
-                else: # Fallback to start if no FROM (unlikely for a valid Dockerfile)
+                else:
                     new_lines.insert(0, "WORKDIR /app\n")
                     logging.warning("No FROM instruction found. Added WORKDIR /app at start of Dockerfile.")
                     updated_any_rule = True
@@ -474,13 +362,12 @@ def harden_dockerfile(dockerfile_path):
             return atomic_write_file(dockerfile_path, "".join(new_lines))
         else:
             logging.info("No significant Dockerfile hardening changes needed (USER and WORKDIR are present/handled).")
-            return False # No changes were made based on these rules
+            return False
 
     except Exception as e:
         logging.error(f"Error hardening Dockerfile '{dockerfile_path}': {e}")
         return False
 
-# --- NEW FUNCTION FOR MODIFIYING DOCKERFILE FOR NPM --legacy-peer-deps ---
 def modify_dockerfile_for_npm_legacy_peer_deps(dockerfile_path):
     """
     Modifies the Dockerfile to use 'npm install --legacy-peer-deps' if 'RUN npm install' is found.
@@ -498,8 +385,6 @@ def modify_dockerfile_for_npm_legacy_peer_deps(dockerfile_path):
         new_lines = []
         modified = False
         for line in lines:
-            # Look for lines that exactly match "RUN npm install" (case-insensitive, optional leading/trailing spaces)
-            # This avoids modifying `npm install -g` or other npm commands
             if re.match(r'^\s*RUN\s+npm\s+install\s*$', line, re.IGNORECASE):
                 new_line = line.replace("npm install", "npm install --legacy-peer-deps").strip() + "\n"
                 new_lines.append(new_line)
@@ -517,25 +402,21 @@ def modify_dockerfile_for_npm_legacy_peer_deps(dockerfile_path):
         logging.error(f"Error modifying Dockerfile for npm --legacy-peer-deps in '{dockerfile_path}': {e}")
         return False
 
-# --- MODIFIED build_docker_image function with retry logic ---
 def build_docker_image(dockerfile_path, image_name, app_root_dir):
     """
     Builds a Docker image. Adds a retry with --legacy-peer-deps if initial build fails due to npm ERESOLVE.
     Returns True on success, False on failure.
     """
-    # Use os.path.basename to ensure Dockerfile is referenced correctly if cwd is its parent
     cmd = ["docker", "build", "-f", os.path.basename(dockerfile_path), "-t", image_name, "."]
     
     logging.info(f"Attempting to build Docker image '{image_name}' from {dockerfile_path}")
     
-    # First attempt: regular build
     success, stderr_output = run_command(cmd, cwd=app_root_dir, check_result=False, capture_output=True, description="docker build")
 
     if not success:
         if "npm error code ERESOLVE" in stderr_output:
             logging.warning("Docker build failed due to npm ERESOLVE error. Attempting to apply --legacy-peer-deps fix.")
             
-            # Save original Dockerfile content before modification for potential rollback
             original_dockerfile_content = None
             if os.path.exists(dockerfile_path):
                 with open(dockerfile_path, 'r', encoding='utf-8') as f:
@@ -543,7 +424,6 @@ def build_docker_image(dockerfile_path, image_name, app_root_dir):
 
             if modify_dockerfile_for_npm_legacy_peer_deps(dockerfile_path):
                 logging.info("Dockerfile modified. Retrying docker build with --legacy-peer-deps.")
-                # Second attempt: with --legacy-peer-deps
                 success_retry, _ = run_command(cmd, cwd=app_root_dir, check_result=False, description="docker build with --legacy-peer-deps")
                 if success_retry:
                     logging.warning("\n" + "="*80 + "\n")
@@ -555,7 +435,6 @@ def build_docker_image(dockerfile_path, image_name, app_root_dir):
                     return True
                 else:
                     logging.error("Retried docker build with --legacy-peer-deps, but it still failed. Rolling back Dockerfile.")
-                    # Rollback Dockerfile to original state if retry also failed
                     if original_dockerfile_content:
                         atomic_write_file(dockerfile_path, original_dockerfile_content)
                         logging.info("Dockerfile rolled back to original state.")
@@ -570,57 +449,83 @@ def build_docker_image(dockerfile_path, image_name, app_root_dir):
         logging.info(f"Successfully built Docker image: {image_name}")
         return True
 
-# --- Mock-up for vulnerability data and main pipeline flow ---
-# This part simulates how your main script would call these functions
-
-# In a real scenario, this data would come from Trivy/Grype scan output.
-# This is just for demonstrating the fix.
 def parse_vulnerability_report(report_path):
     """
     Parses a vulnerability report (e.g., Trivy JSON) and extracts
     actionable remediation steps. This is a simplified mock.
+    In a real scenario, you would parse actual CVEs and their fix versions.
     """
-    logging.info(f"Parsing vulnerability report from {report_path} (mock function).")
-    # For demonstration, we'll simulate a scenario where no direct vuln
-    # is found *but* the build failed due to the npm ERESOLVE.
-    # In a real system, you'd iterate through actual CVEs and their fix versions.
+    logging.info(f"Parsing vulnerability report from {report_path}.")
+    remediations = []
+    if not os.path.exists(report_path):
+        logging.warning(f"Trivy report '{report_path}' not found. No direct dependency fixes will be attempted from report.")
+        return remediations
     
-    # Example: If a specific npm package (e.g., 'marked') had a CVE,
-    # you'd return something like:
-    # return [
-    #     {"type": "npm", "package": "marked", "fixed_version": "4.3.0", "app_path": "frontend"}
-    # ]
-    
-    # For this specific scenario, we're not getting a direct CVE fix instruction
-    # but rather handling a build-time dependency conflict.
-    return [] 
+    try:
+        with open(report_path, 'r', encoding='utf-8') as f:
+            report_data = json.load(f)
+        
+        for result in report_data.get('Results', []):
+            target = result.get('Target', '')
+            for vuln in result.get('Vulnerabilities', []):
+                # Only consider critical/high and if a fix version is available
+                if vuln.get('Severity') in ['CRITICAL', 'HIGH'] and vuln.get('FixedVersion'):
+                    pkg_name = vuln.get('PkgName')
+                    fixed_version = vuln.get('FixedVersion')
+                    vulnerability_id = vuln.get('VulnerabilityID')
+                    
+                    # Heuristic to determine package manager based on target/path
+                    # This needs to be robust, perhaps using known file patterns
+                    pkg_type = "unknown"
+                    if "npm" in target.lower() or "node_modules" in target.lower():
+                        pkg_type = "npm"
+                    elif "pip" in target.lower() or "python" in target.lower() or "requirements.txt" in target.lower():
+                        pkg_type = "pip"
+                    elif "gem" in target.lower() or "ruby" in target.lower() or "gemfile" in target.lower():
+                        pkg_type = "gem"
+                    elif "go.mod" in target.lower() or "go" in target.lower():
+                        pkg_type = "go"
 
-def find_fix_online(vulnerability_id, package_name, installed_version, description, severity, current_base_image=None):
-    """
-    Mocks searching for online remediation information.
-    In a real system, this would involve querying vulnerability databases (e.g., NVD, OVE, vendor advisories)
-    or using AI/ML to infer fix versions.
-    """
-    logging.info(f"Mock: Searching online for fix for {vulnerability_id} / {package_name}@{installed_version}")
-    # Example: If it was a known vulnerability in 'marked'
-    # if package_name == "marked" and installed_version == "0.6.2":
-    #     return {"fixed_version": "4.3.0", "remediation_advice": "Update marked to 4.3.0 or higher."}
-    return {} # No specific fix found by this mock for the build error
+                    if pkg_type != "unknown":
+                        remediations.append({
+                            "type": pkg_type,
+                            "package": pkg_name,
+                            "fixed_version": fixed_version,
+                            "vulnerability_id": vulnerability_id,
+                            "app_path": os.environ.get('APP_ROOT_DIR', '.') # Assume app_root_dir covers this target
+                        })
+        logging.info(f"Found {len(remediations)} actionable vulnerabilities from report.")
+        return remediations
+    except json.JSONDecodeError as e:
+        logging.error(f"Failed to parse JSON report '{report_path}': {e}")
+        return []
+    except Exception as e:
+        logging.error(f"An unexpected error occurred while parsing report '{report_path}': {e}")
+        return []
 
 def main():
-    # Define paths based on the provided log context
-    # These would typically be passed as environment variables or arguments in a CI/CD setup
-    workspace_root = "/home/runner/work/real-estate-management/real-estate-management"
-    frontend_app_dir = os.path.join(workspace_root, "frontend")
-    dockerfile_path = os.path.join(frontend_app_dir, "Dockerfile")
-    
-    # Assume a dynamic image name generation for the remediated image
-    timestamp = int(time.time())
-    remediated_image_name = f"kirmadadaa/taskapi-frontend:remediated-{timestamp}"
-    
-    logging.info(f"Starting automated vulnerability remediation pipeline for {frontend_app_dir}")
+    # Retrieve environment variables passed from GitHub Actions workflow
+    workspace_root = os.getcwd() # GitHub Actions runner sets CWD to repo root
+    app_root_dir = os.environ.get('APP_ROOT_DIR')
+    dockerfile_path = os.environ.get('DOCKERFILE_PATH')
+    base_image_name = os.environ.get('IMAGE_NAME') # Base image name without tag
+    trivy_report_path = os.environ.get('TRIVY_REPORT_PATH', 'trivy-report.json')
+
+    if not app_root_dir or not dockerfile_path or not base_image_name:
+        logging.error("Missing required environment variables (APP_ROOT_DIR, DOCKERFILE_PATH, IMAGE_NAME). Exiting.")
+        sys.exit(1)
+
+    # Ensure paths are absolute or correctly relative to the current working directory (repo root)
+    app_root_dir = os.path.join(workspace_root, app_root_dir)
+    dockerfile_path = os.path.join(workspace_root, dockerfile_path)
+    # The Trivy report is downloaded to the current working directory, so it's fine.
+
+    logging.info(f"Starting automated vulnerability remediation pipeline for {app_root_dir}")
+    logging.info(f"Dockerfile Path: {dockerfile_path}")
+    logging.info(f"Base Image Name: {base_image_name}")
 
     changes_made = False
+    remediation_status = "no_changes" # Can be: no_changes, applied_fixes, build_failed, scan_failed, vulns_remain, success
 
     # Step 1: Apply general Dockerfile hardening
     logging.info("Attempting to apply general Dockerfile hardening rules.")
@@ -630,93 +535,146 @@ def main():
     else:
         logging.info("No Dockerfile hardening changes were applied or needed.")
 
-    # Step 2: (Optional) Parse scan report and apply specific dependency fixes
-    # In this scenario, the user's provided logs don't include Trivy output,
-    # but indicate a build failure, so we'll simulate no direct package fixes
-    # from a scan report, but the build_docker_image will handle the npm error.
+    # Step 2: Parse initial Trivy report and apply specific dependency fixes
+    logging.info(f"Parsing initial Trivy report: {trivy_report_path}")
+    remediations = parse_vulnerability_report(trivy_report_path)
     
-    # Placeholder for actual vulnerability parsing and fixing
-    # remediations = parse_vulnerability_report("path/to/trivy-report.json")
-    # for rem in remediations:
-    #     if rem["type"] == "npm":
-    #         if fix_npm_dependency(rem["package"], rem["fixed_version"], os.path.join(workspace_root, rem["app_path"])):
-    #             changes_made = True
-    #     elif rem["type"] == "pip":
-    #         if fix_pip_dependency(rem["package"], rem["fixed_version"], os.path.join(workspace_root, rem["app_path"])):
-    #             changes_made = True
-    #     # ... handle other types like gem, go mod, os packages ...
-
-    logging.info("Checking for changes that necessitate image rebuild.")
+    for rem in remediations:
+        logging.info(f"Attempting to fix {rem['type']} package: {rem['package']} to version {rem['fixed_version']} for {rem['vulnerability_id']}")
+        fix_success = False
+        if rem["type"] == "npm":
+            fix_success = fix_npm_dependency(rem["package"], rem["fixed_version"], app_root_dir)
+        elif rem["type"] == "pip":
+            fix_success = fix_pip_dependency(rem["package"], rem["fixed_version"], app_root_dir)
+        elif rem["type"] == "gem":
+            fix_success = fix_gem_dependency(rem["package"], rem["fixed_version"], app_root_dir)
+        elif rem["type"] == "go":
+            fix_success = fix_go_dependency(rem["package"], rem["fixed_version"], app_root_dir)
+        
+        if fix_success:
+            changes_made = True
+            logging.info(f"Successfully applied fix for {rem['package']}@{rem['fixed_version']}.")
+        else:
+            logging.warning(f"Failed to apply fix for {rem['package']}@{rem['fixed_version']}. Manual intervention may be needed for {rem['vulnerability_id']}.")
 
     # Use Git to detect if any files were modified by the remediation steps
-    # This is more robust than relying on the boolean 'changes_made' from fix functions
     try:
-        git_status_cmd = ["git", "status", "--porcelain"]
-        success, git_output = run_command(git_status_cmd, cwd=workspace_root, capture_output=True, check_result=True, description="git status")
+        logging.info("Checking for any file changes from remediation steps using git status.")
+        run_command(["git", "add", "."], cwd=workspace_root, description="git add all changes", check_result=True)
+        success, git_output = run_command(["git", "status", "--porcelain"], cwd=workspace_root, capture_output=True, check_result=True, description="git status --porcelain")
+        
         if success and git_output:
-            logging.info("Changes detected in the repository due to remediation. Attempting to rebuild and re-scan image.")
+            logging.info("Changes detected in the repository after remediation steps.")
             changes_made = True
         else:
-            logging.info("No changes detected in the repository from remediation. Skipping rebuild/re-scan.")
-            changes_made = False # Ensure this is false if git status is clean
+            logging.info("No new changes detected in the repository after remediation steps.")
+            # If no changes, ensure 'changes_made' flag is respected.
+            # If it was True due to Dockerfile hardening, keep it True.
+            # If no hardening and no dependency fixes, it should remain False.
+            if not changes_made: # Only set to False if no changes were initially detected (e.g. from hardening)
+                changes_made = False
 
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Git command failed, cannot determine changes: {e}")
-        # Proceed with rebuild if git status failed, better safe than sorry
-        changes_made = True 
     except Exception as e:
-        logging.error(f"An unexpected error occurred during git status check: {e}")
-        changes_made = True
+        logging.error(f"An error occurred during git status check: {e}. Assuming changes to proceed with build.")
+        changes_made = True 
+        remediation_status = "git_check_failed"
+
+    remediated_image_tag_file = "remediated_image_tag.txt"
+    remediated_scan_report_file = "trivy-remediated-scan-report.json"
+    remediated_image_name_with_tag = ""
 
     if changes_made:
-        # Step 3: Rebuild and Retest the image
-        if build_docker_image(dockerfile_path, remediated_image_name, frontend_app_dir):
-            logging.info(f"Docker image '{remediated_image_name}' built successfully.")
+        logging.info("Changes were made. Proceeding with Docker image rebuild and re-scan.")
+        timestamp = int(time.time())
+        remediated_image_name_with_tag = f"{base_image_name}:remediated-{timestamp}"
+        
+        # Step 3: Rebuild the image with patched components
+        logging.info(f"Attempting to rebuild Docker image: {remediated_image_name_with_tag}")
+        if build_docker_image(dockerfile_path, remediated_image_name_with_tag, app_root_dir):
+            logging.info(f"Docker image '{remediated_image_name_with_tag}' built successfully.")
             
-            # Step 4: Re-scan the newly built image to confirm remediation
-            logging.info(f"Re-scanning remediated image '{remediated_image_name}' with Trivy.")
-            scan_cmd = ["trivy", "image", "--format", "json", "--output", "remediated_trivy_report.json", remediated_image_name]
+            # Write the new image tag to a file for the workflow to use
+            try:
+                with open(remediated_image_tag_file, 'w') as f:
+                    f.write(remediated_image_name_with_tag)
+                logging.info(f"Wrote remediated image tag '{remediated_image_name_with_tag}' to {remediated_image_tag_file}")
+            except Exception as e:
+                logging.error(f"Failed to write remediated image tag to file: {e}")
+                remediation_status = "tag_file_write_failed"
+                sys.exit(1) # Fail if we can't communicate the new tag
+
+            # Step 4: Re-scan the newly built image to confirm zero known vulnerabilities remain
+            logging.info(f"Re-scanning remediated image '{remediated_image_name_with_tag}' with Trivy.")
+            scan_cmd = ["trivy", "image", "--format", "json", "--output", remediated_scan_report_file, remediated_image_name_with_tag]
             
-            # Run Trivy scan. We can set check_result=False if we want to parse even with findings,
-            # but for validation, we expect zero critical/high vulns.
             success_scan, scan_output = run_command(scan_cmd, cwd=workspace_root, check_result=False, capture_output=True, description="Trivy re-scan")
             
             if success_scan:
-                logging.info(f"Trivy re-scan completed for {remediated_image_name}. Analyzing report...")
-                # Further parsing of 'remediated_trivy_report.json' would go here
-                # to confirm no critical/high vulnerabilities remain.
-                # Example:
-                # with open(os.path.join(workspace_root, "remediated_trivy_report.json"), 'r', encoding='utf-8') as f:
-                #     report_data = json.load(f)
-                #     # Check for critical/high vulns
-                #     if any(vuln['Severity'] in ['CRITICAL', 'HIGH'] for result in report_data.get('Results', []) for vuln in result.get('Vulnerabilities', [])):
-                #         logging.error(f"Remediated image '{remediated_image_name}' still has Critical/High vulnerabilities. Remediation failed.")
-                #         sys.exit(1)
-                #     else:
-                #         logging.info(f"Remediated image '{remediated_image_name}' is clean of Critical/High vulnerabilities.")
-                #         # Step 5: Integrate - Auto-commit & PR fixed files, Notify
-                #         logging.info("Committing remediated changes...")
-                #         run_command(["git", "add", "."], cwd=workspace_root, description="git add")
-                #         commit_message = f"feat(automation): Automated vulnerability remediation for {os.path.basename(frontend_app_dir)}"
-                #         run_command(["git", "commit", "-m", commit_message], cwd=workspace_root, description="git commit")
-                #         # In a real GitHub Actions workflow, pushing and creating PR would happen here.
-                #         # E.g., using 'gh pr create' or 'git push' to a new branch.
-                #         # Notify Slack: webhook_url, message_payload
-                #         logging.info("Remediation complete and image is clean. Manual review of Git changes recommended.")
-                #         sys.exit(0) # Success
+                logging.info(f"Trivy re-scan completed for {remediated_image_name_with_tag}. Analyzing report...")
+                # Analyze the remediated scan report for remaining critical/high vulnerabilities
+                try:
+                    with open(remediated_scan_report_file, 'r', encoding='utf-8') as f:
+                        report_data = json.load(f)
+                    
+                    remaining_vulns = []
+                    for result in report_data.get('Results', []):
+                        for vuln in result.get('Vulnerabilities', []):
+                            if vuln.get('Severity') in ['CRITICAL', 'HIGH']:
+                                remaining_vulns.append(vuln)
+
+                    if remaining_vulns:
+                        logging.error(f"Remediated image '{remediated_image_name_with_tag}' still has Critical/High vulnerabilities. Remediation failed.")
+                        for vuln in remaining_vulns:
+                            logging.error(f"  - {vuln.get('VulnerabilityID')}: {vuln.get('PkgName')} ({vuln.get('Severity')}) - Fixed In: {vuln.get('FixedVersion', 'N/A')}")
+                        remediation_status = "vulns_remain"
+                        sys.exit(1) # Indicate failure for the workflow
+                    else:
+                        logging.info(f"Remediated image '{remediated_image_name_with_tag}' is clean of Critical/High vulnerabilities. Success!")
+                        remediation_status = "success"
+                except json.JSONDecodeError as e:
+                    logging.error(f"Failed to parse remediated scan report '{remediated_scan_report_file}': {e}")
+                    remediation_status = "scan_report_parse_failed"
+                    sys.exit(1)
+                except Exception as e:
+                    logging.error(f"An unexpected error occurred during re-scan report analysis: {e}")
+                    remediation_status = "scan_report_analysis_error"
+                    sys.exit(1)
             else:
-                logging.error(f"Trivy re-scan failed for {remediated_image_name}. Please investigate.")
-                # This might happen if Trivy itself fails, not necessarily due to vulns.
+                logging.error(f"Trivy re-scan failed for {remediated_image_name_with_tag}. Please investigate.")
+                remediation_status = "scan_failed"
                 sys.exit(1)
         else:
             logging.error("Failed to rebuild Docker image after remediation attempts. Review logs for details.")
+            remediation_status = "build_failed"
             sys.exit(1)
     else:
         logging.info("No remediation changes were applied or detected. Exiting without further action.")
-        sys.exit(0) # Exit successfully if no action was needed
+        remediation_status = "no_changes"
+    
+    # At the very end, if the script successfully completed remediation steps
+    # and a new image was built, it should push it.
+    # We are assuming the 'docker/build-push-action@v5' handles the push,
+    # or the build_docker_image function in the script needs to be modified
+    # to perform `docker push`. Given the workflow already has a build-push-action,
+    # the script should just *build* locally if needed, and the workflow itself
+    # should re-trigger a build/push for the remediated code.
+    # For now, `build_docker_image` in the script only builds, not pushes.
+    # The GitHub Action flow will handle the push via `git auto-commit`.
+    
+    # If we reached here, it means the script ran to completion,
+    # even if remediation_status is "no_changes".
+    # The workflow will use the `remediated_image_tag.txt` and `trivy-remediated-scan-report.json`
+    # for subsequent steps.
+    logging.info(f"Remediation pipeline finished with status: {remediation_status}")
+    
+    # Exit with a non-zero code if remediation ultimately failed,
+    # allowing the GitHub Actions job to fail.
+    if remediation_status in ["build_failed", "scan_failed", "vulns_remain", "scan_report_parse_failed", "scan_report_analysis_error", "tag_file_write_failed", "git_check_failed"]:
+        sys.exit(1) # Indicate a failure to the workflow
+    else:
+        sys.exit(0) # Indicate success
 
 if __name__ == "__main__":
-    # Ensure this script is run from a context where `git` is available
-    # and the paths point to your actual repository.
-    # For a GitHub Actions runner, the current working directory will be the repo root.
+    # The main function is now explicitly called
+    # when the script is executed.
     main()

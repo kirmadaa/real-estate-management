@@ -67,14 +67,14 @@ jobs:
         continue-on-error: true # Allow subsequent steps to run even if vulnerabilities are found
 
       - name: Upload Trivy JSON Report (Original)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: trivy-json-report-original
           path: ${{ steps.trivy_scan_original.outputs.TRIVY_REPORT_PATH }}
           retention-days: 5
 
       - name: Upload Trivy Text Report (Original)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: trivy-text-report-original
           path: ${{ steps.trivy_scan_original.outputs.TRIVY_TXT_REPORT_PATH }}
@@ -82,7 +82,7 @@ jobs:
       
       - name: Upload Trivy SARIF Report to GitHub Security Tab (Original)
         if: always() # Always upload, even if scan fails
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.trivy_scan_original.outputs.TRIVY_SARIF_REPORT_PATH }}
 
@@ -192,7 +192,7 @@ jobs:
 
       - name: Upload Trivy Fixed Image JSON Report
         if: ${{ (steps.apply_fixes.outputs.DOCKERFILE_MODIFIED == 'true' || steps.set_dockerfile_modified_output_no_autofix.outputs.DOCKERFILE_MODIFIED == 'true' || steps.git_status.outputs.has_changes == 'true') && steps.build_fixed.outcome == 'success' }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: trivy-fixed-image-json-report
           path: ${{ steps.trivy_scan_fixed.outputs.TRIVY_REPORT_FIXED_PATH }}

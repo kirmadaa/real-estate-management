@@ -13,6 +13,8 @@ RUN apk update && \
     py3-pip
 
 # Example of a Python application setup that might have vulnerable dependencies
+# Added by apply_fixes.py for Python packages
+RUN pip install --upgrade Flask && pip install --upgrade urllib3
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

@@ -4,6 +4,16 @@ import re
 import os
 from packaging.version import parse as parse_version
 
+# Define a global log file path for debugging
+DEBUG_LOG_FILE = "apply_fixes_debug.log"
+
+def log_debug(message):
+    """Writes debug messages to a dedicated log file."""
+    with open(DEBUG_LOG_FILE, 'a') as f:
+        f.write(f"DEBUG: {message}\n")
+    # Also print to stdout, in case it eventually shows up
+    print(f"DEBUG: {message}")
+
 def get_base_image_info(dockerfile_lines):
     """Extracts base image name and tag from Dockerfile lines."""
     for line in dockerfile_lines:
@@ -26,6 +36,10 @@ def apply_fixes(dockerfile_path, vulnerabilities_json_path):
     Applies fixes to the Dockerfile based on identified vulnerabilities.
     Prioritizes base image updates, then package updates.
     """
+    # Clear the debug log file at the beginning of each run
+    if os.path.exists(DEBUG_LOG_FILE):
+        os.remove(DEBUG_LOG_FILE)
+
     try:
         with open(vulnerabilities_json_path, 'r') as f:
             vulnerabilities = json.load(f)
@@ -128,7 +142,7 @@ def apply_fixes(dockerfile_path, vulnerabilities_json_path):
                             if pkg_name not in python_packages_to_upgrade_target_versions or \
                                parse_version(python_packages_to_upgrade_target_versions[pkg_name]) < eligible_fixed_version:
                                 python_packages_to_upgrade_target_versions[pkg_name] = str(eligible_fixed_version)
-                                changes_made = True # Crucially, this sets changes_made to True if an upgrade is needed.
+                                changes_made = True
 
                     except Exception as e:
                         print(f"Warning: Could not parse Python package versions for {pkg_name}: {e}", file=sys.stderr)
@@ -170,28 +184,26 @@ def apply_fixes(dockerfile_path, vulnerabilities_json_path):
             new_pip_upgrade_command = f"RUN pip install --no-cache-dir --upgrade {' '.join(pip_upgrade_parts)}\n"
 
             inserted_or_modified = False
-            found_existing_pip_run_line = False # New flag to track if any relevant line was found
+            found_existing_pip_run_line = False
 
-            print(f"DEBUG: Generated new_pip_upgrade_command: '{new_pip_upgrade_command.strip()}'")
+            log_debug(f"Generated new_pip_upgrade_command: '{new_pip_upgrade_command.strip()}'")
 
             for i, line in enumerate(modified_dockerfile_lines):
                 if re.search(r'RUN\s+(pip|python -m pip)\s+install.*', line, re.IGNORECASE):
                     found_existing_pip_run_line = True
-                    print(f"DEBUG: Existing pip install line at index {i}: '{line.strip()}'")
+                    log_debug(f"Existing pip install line at index {i}: '{line.strip()}'")
 
-                    # Change from 'not in' to '!=' for more aggressive replacement
                     if new_pip_upgrade_command.strip() != line.strip():
-                        print(f"DEBUG: Found existing line is different, modifying it.")
+                        log_debug(f"Found existing line is different, modifying it.")
                         modified_dockerfile_lines[i] = new_pip_upgrade_command
                         inserted_or_modified = True
                         changes_made = True
-                        break # Modified an existing line, no need to look further or insert new
+                        break
                     else:
-                        print(f"DEBUG: Existing line is identical to generated, no modification needed.")
-                        inserted_or_modified = True # Mark as handled to prevent new insertion
-                        break # Found an identical line, no modification, no new insertion
+                        log_debug(f"Existing line is identical to generated, no modification needed.")
+                        inserted_or_modified = True
+                        break
 
-            # Only insert a new line if no relevant existing line was found OR modified
             if not inserted_or_modified and not found_existing_pip_run_line:
                 insert_index = -1
                 insert_index = from_line_index + 1 if from_line_index != -1 else 0
@@ -203,7 +215,7 @@ def apply_fixes(dockerfile_path, vulnerabilities_json_path):
                     elif line.strip().startswith("RUN"):
                         insert_index = i + 1
 
-                print(f"DEBUG: No existing pip install line found or modified, inserting new one at index {insert_index}")
+                log_debug(f"No existing pip install line found or modified, inserting new one at index {insert_index}")
                 modified_dockerfile_lines.insert(insert_index, "# Added by apply_fixes.py for Python packages\n")
                 modified_dockerfile_lines.insert(insert_index + 1, new_pip_upgrade_command)
                 changes_made = True

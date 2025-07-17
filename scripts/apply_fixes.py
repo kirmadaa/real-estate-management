@@ -31,7 +31,6 @@ def apply_fixes(dockerfile_path, vulnerabilities_json_path):
             vulnerabilities = json.load(f)
     except FileNotFoundError:
         print(f"No vulnerabilities file found at {vulnerabilities_json_path}. No fixes to apply.")
-        # Ensure Dockerfile.fixed is NOT created if no vulnerabilities file.
         if os.path.exists(dockerfile_path + ".fixed"):
             os.remove(dockerfile_path + ".fixed")
         return
@@ -39,12 +38,10 @@ def apply_fixes(dockerfile_path, vulnerabilities_json_path):
         print(f"Error: Invalid JSON in {vulnerabilities_json_path}", file=sys.stderr)
         sys.exit(1)
 
-    # --- START OF FIX ---
     vulnerabilities_data = []
     if isinstance(vulnerabilities, dict) and 'Results' in vulnerabilities:
         vulnerabilities_data = vulnerabilities['Results']
     elif isinstance(vulnerabilities, list):
-        # Assume it's already the list of results if it's a list
         vulnerabilities_data = vulnerabilities
     else:
         print("Error: Unexpected JSON structure. Expected a dictionary with 'Results' or a list.", file=sys.stderr)
@@ -52,11 +49,9 @@ def apply_fixes(dockerfile_path, vulnerabilities_json_path):
 
     if not vulnerabilities_data:
         print("No fixable vulnerabilities identified in the report.")
-        # Ensure Dockerfile.fixed is NOT created if no fixable vulns.
         if os.path.exists(dockerfile_path + ".fixed"):
             os.remove(dockerfile_path + ".fixed")
         return
-    # --- END OF FIX ---
 
     try:
         with open(dockerfile_path, 'r') as f:
@@ -71,8 +66,9 @@ def apply_fixes(dockerfile_path, vulnerabilities_json_path):
     current_base_image_name, current_base_image_tag = get_base_image_info(dockerfile_lines)
     from_line_index = find_from_line_index(dockerfile_lines)
 
+    # Strategy 1: Prioritize base image update
     if current_base_image_name and from_line_index != -1:
-        for result in vulnerabilities_data: # Use vulnerabilities_data
+        for result in vulnerabilities_data:
             if result.get('Target', '').lower().startswith(f"{current_base_image_name.lower()}:{current_base_image_tag}") and \
                result.get('Type') in ['alpine', 'debian', 'centos', 'redhat', 'suse']:
 
@@ -88,10 +84,11 @@ def apply_fixes(dockerfile_path, vulnerabilities_json_path):
                     changes_made = True
                     break
 
+    # Strategy 2: Add RUN commands for package upgrades
     os_packages_to_upgrade = {}
     python_packages_to_upgrade_target_versions = {}
 
-    for result in vulnerabilities_data: # Use vulnerabilities_data
+    for result in vulnerabilities_data:
         target_type = result.get('Type')
 
         if target_type in ['alpine', 'debian', 'centos', 'redhat', 'suse'] and 'Vulnerabilities' in result:
@@ -131,12 +128,13 @@ def apply_fixes(dockerfile_path, vulnerabilities_json_path):
                             if pkg_name not in python_packages_to_upgrade_target_versions or \
                                parse_version(python_packages_to_upgrade_target_versions[pkg_name]) < eligible_fixed_version:
                                 python_packages_to_upgrade_target_versions[pkg_name] = str(eligible_fixed_version)
-                                changes_made = True
+                                changes_made = True # Crucially, this sets changes_made to True if an upgrade is needed.
 
                     except Exception as e:
                         print(f"Warning: Could not parse Python package versions for {pkg_name}: {e}", file=sys.stderr)
                         continue
 
+    # Handle general OS package upgrades
     if os_packages_to_upgrade:
         print(f"Identified OS packages to upgrade: {os_packages_to_upgrade}")
 
@@ -160,6 +158,7 @@ def apply_fixes(dockerfile_path, vulnerabilities_json_path):
                 modified_dockerfile_lines.insert(insert_index + 1, upgrade_command_line)
                 changes_made = True
 
+    # Handle Python package upgrades
     if python_packages_to_upgrade_target_versions:
         print(f"Identified Python packages to upgrade: {python_packages_to_upgrade_target_versions}")
 
@@ -171,16 +170,29 @@ def apply_fixes(dockerfile_path, vulnerabilities_json_path):
             new_pip_upgrade_command = f"RUN pip install --no-cache-dir --upgrade {' '.join(pip_upgrade_parts)}\n"
 
             inserted_or_modified = False
+            found_existing_pip_run_line = False # New flag to track if any relevant line was found
+
+            print(f"DEBUG: Generated new_pip_upgrade_command: '{new_pip_upgrade_command.strip()}'")
+
             for i, line in enumerate(modified_dockerfile_lines):
                 if re.search(r'RUN\s+(pip|python -m pip)\s+install.*', line, re.IGNORECASE):
-                    if new_pip_upgrade_command.strip() not in line.strip():
-                        print(f"Modifying existing pip install line at index {i}")
+                    found_existing_pip_run_line = True
+                    print(f"DEBUG: Existing pip install line at index {i}: '{line.strip()}'")
+
+                    # Change from 'not in' to '!=' for more aggressive replacement
+                    if new_pip_upgrade_command.strip() != line.strip():
+                        print(f"DEBUG: Found existing line is different, modifying it.")
                         modified_dockerfile_lines[i] = new_pip_upgrade_command
                         inserted_or_modified = True
                         changes_made = True
-                        break
+                        break # Modified an existing line, no need to look further or insert new
+                    else:
+                        print(f"DEBUG: Existing line is identical to generated, no modification needed.")
+                        inserted_or_modified = True # Mark as handled to prevent new insertion
+                        break # Found an identical line, no modification, no new insertion
 
-            if not inserted_or_modified:
+            # Only insert a new line if no relevant existing line was found OR modified
+            if not inserted_or_modified and not found_existing_pip_run_line:
                 insert_index = -1
                 insert_index = from_line_index + 1 if from_line_index != -1 else 0
 
@@ -191,7 +203,7 @@ def apply_fixes(dockerfile_path, vulnerabilities_json_path):
                     elif line.strip().startswith("RUN"):
                         insert_index = i + 1
 
-                print(f"Inserting new pip install line at index {insert_index}")
+                print(f"DEBUG: No existing pip install line found or modified, inserting new one at index {insert_index}")
                 modified_dockerfile_lines.insert(insert_index, "# Added by apply_fixes.py for Python packages\n")
                 modified_dockerfile_lines.insert(insert_index + 1, new_pip_upgrade_command)
                 changes_made = True

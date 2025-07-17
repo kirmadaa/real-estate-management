@@ -24,9 +24,12 @@ jobs:
           fetch-depth: 0 # Needed for git operations later
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.x' # Use a compatible Python version, e.g., '3.9' or '3.10'
+  
+      - name: Install Python dependencies
+        run: pip install packaging
 
       - name: Install Trivy
         run: |

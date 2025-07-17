@@ -80,11 +80,11 @@ jobs:
           path: ${{ steps.trivy_scan_original.outputs.TRIVY_TXT_REPORT_PATH }}
           retention-days: 5
       
-      - name: Upload Trivy SARIF Report to GitHub Security Tab (Original)
-        if: always() # Always upload, even if scan fails
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: ${{ steps.trivy_scan_original.outputs.TRIVY_SARIF_REPORT_PATH }}
+      # - name: Upload Trivy SARIF Report to GitHub Security Tab (Original)
+      #   if: always() # Always upload, even if scan fails
+      #   uses: github/codeql-action/upload-sarif@v4
+      #   with:
+      #     sarif_file: ${{ steps.trivy_scan_original.outputs.TRIVY_SARIF_REPORT_PATH }}
 
 
       - name: Parse Trivy Report & Identify Fixes

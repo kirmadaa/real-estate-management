@@ -1,16 +1,21 @@
 # Dockerfile
-FROM alpine:3.19
+FROM alpine:3.18
 LABEL maintainer="devsecops@example.com"
 
-# Example: Install some packages, potentially old versions
-# RUN apk update && apk add --no-cache curl openssl git bash # Original line might be commented or removed if replaced by global upgrade
+# Install common OS packages, including python3 and pip for our automation
+RUN apk update && \
+    apk add --no-cache \
+    curl \
+    openssl \
+    git \
+    bash \
+    python3 \
+    py3-pip
 
-RUN apk upgrade --no-cache # Added by apply_fixes.py for OS package upgrades
-RUN pip install --upgrade requests && pip install --upgrade urllib3 # Added by apply_fixes.py for Python packages
-
+# Example of a Python application setup that might have vulnerable dependencies
 WORKDIR /app
 COPY requirements.txt .
-# RUN pip install --no-cache-dir -r requirements.txt # Original line might be left or modified based on strategy
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 

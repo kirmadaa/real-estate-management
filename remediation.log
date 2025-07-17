@@ -53,3 +53,14 @@
 2025-07-16 23:43:49,504 - INFO - Found 0 actionable vulnerabilities from report.
 2025-07-16 23:43:49,507 - INFO - No actionable vulnerabilities found in the report. Exiting remediation.
 2025-07-16 23:43:49,507 - INFO - Automated remediation pipeline completed successfully (or with manageable unfixed issues).
+2025-07-17 00:01:41,132 - INFO - Starting automated vulnerability remediation pipeline for /home/runner/work/real-estate-management/real-estate-management/frontend//
+2025-07-17 00:01:41,132 - INFO - Dockerfile Path: /home/runner/work/real-estate-management/real-estate-management/frontend/Dockerfile
+2025-07-17 00:01:41,132 - INFO - Attempting to apply general Dockerfile hardening rules.
+2025-07-17 00:01:41,132 - INFO - Applying hardening to Dockerfile: /home/runner/work/real-estate-management/real-estate-management/frontend/Dockerfile
+2025-07-17 00:01:41,132 - INFO - Dockerfile already has a WORKDIR instruction. Skipping WORKDIR hardening.
+2025-07-17 00:01:41,132 - INFO - Dockerfile already has a non-root USER instruction or no suitable insertion point. Skipping user hardening.
+2025-07-17 00:01:41,133 - INFO - No significant Dockerfile hardening changes needed (USER and WORKDIR are present/handled).
+2025-07-17 00:01:41,133 - INFO - Parsing initial Trivy report: trivy-report.json
+2025-07-17 00:01:41,169 - INFO - Found 0 actionable vulnerabilities from report.
+2025-07-17 00:01:41,172 - INFO - No actionable vulnerabilities found in the report. Exiting remediation.
+2025-07-17 00:01:41,172 - INFO - Automated remediation pipeline completed successfully (or with manageable unfixed issues).
